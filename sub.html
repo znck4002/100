@@ -1,0 +1,1181 @@
+<!DOCTYPE html>
+<html lang="zh-TW">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>VTuber 動態數據分析 - 高光聯動優化版</title>
+    <!-- 引入 Google Material Symbols 圖示庫 -->
+    <link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Material+Symbols+Outlined:opsz,wght,FILL,GRAD@20..48,100..700,0..1,-50..200" />
+    <!-- 引入 Chart.js & Zoom 插件 -->
+    <script src="https://cdn.jsdelivr.net/npm/chart.js"></script>
+    <script src="https://cdn.jsdelivr.net/npm/hammerjs"></script>
+    <script src="https://cdn.jsdelivr.net/npm/chartjs-plugin-zoom"></script>
+    <style>
+        /* 基礎設定：禁止頁面捲動，強制撐滿視窗 */
+        html, body { height: 100%; margin: 0; padding: 0; overflow: hidden; }
+
+        body { 
+            font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, Helvetica, Arial, sans-serif; 
+            background-color: #f0f2f5; 
+            display: flex; justify-content: center; align-items: center; padding: 20px; box-sizing: border-box;
+        }
+
+        .chart-wrapper { 
+            width: 100%; height: 100%; background: white; padding: 20px; border-radius: 16px; 
+            box-shadow: 0 10px 25px rgba(0,0,0,0.05); position: relative; display: flex; flex-direction: column; box-sizing: border-box;
+        }
+
+        /* 控制欄 */
+        .controls { 
+            flex-shrink: 0; display: flex; flex-wrap: wrap; align-items: center; gap: 12px; margin-bottom: 15px; 
+            background: #f8f9fa; padding: 12px 20px; border-radius: 12px; border: 1px solid #e9ecef; 
+        }
+
+        button { padding: 8px 14px; border: 1px solid #dee2e6; border-radius: 6px; background-color: white; color: #495057; cursor: pointer; font-weight: 500; font-size: 13px; transition: all 0.2s; user-select: none; }
+        button.active { background-color: #007bff; color: white; border-color: #007bff; }
+        button:hover:not(.active) { background-color: #e9ecef; }
+        
+        .slider-container { flex-grow: 1; display: flex; align-items: center; gap: 10px; min-width: 250px; }
+        input[type="range"] { flex-grow: 1; cursor: pointer; }
+        .time-display { font-family: monospace; font-weight: bold; color: #495057; min-width: 120px; text-align: right; font-size: 14px; }
+ 
+        /* 中間區塊 */
+        .chart-main-layout { display: flex; width: 100%; flex: 1; min-height: 0; align-items: stretch; }
+        .chart-container { flex: 1; position: relative; cursor: grab; min-width: 0; }
+
+        /* X/Y 軸拉條 */
+        .range-slider-wrapper { flex-shrink: 0; margin-top: 5px; padding: 0 15px 0 65px; position: relative; width: calc(100% - 80px); height: 40px; }
+        .range-slider-track { height: 6px; background: #e9ecef; border-radius: 3px; position: relative; top: 5px; }
+        .range-slider-active { height: 100%; background: #007bff; position: absolute; border-radius: 3px; cursor: grab; }
+
+        .y-range-slider-wrapper { position: relative; width: 35px; margin-right: 5px; height: 100%; }
+        .y-range-slider-track { width: 6px; height: calc(100% - 32px); background: #e9ecef; border-radius: 3px; position: absolute; right: 5px; top: 5px; }
+        .y-range-slider-active { width: 100%; background: #007bff; position: absolute; border-radius: 3px; cursor: grab; }
+
+        .range-thumb { width: 20px; height: 20px; background: white; border: 2px solid #007bff; border-radius: 50%; position: absolute; cursor: pointer; z-index: 10; box-shadow: 0 2px 5px rgba(0,0,0,0.2); }
+        .x-thumb { top: 50%; transform: translate(-50%, -50%); cursor: ew-resize; }
+        .y-thumb { left: 50%; transform: translate(-50%, 50%); cursor: ns-resize; }
+        .range-label { position: absolute; top: 25px; font-size: 12px; font-weight: bold; color: #007bff; white-space: nowrap; transform: translateX(-50%); background: #e7f3ff; padding: 2px 6px; border-radius: 4px; pointer-events: none; }
+
+/* 側邊欄與關閉按鈕 (改為 Flex 佈局以固定表頭，內部列表滾動) */
+        .sidebar-panel { 
+            position: absolute; top: 75px; z-index: 1001; background: rgba(255, 255, 255, 0.98); 
+            border: 1px solid #ddd; border-radius: 12px; box-shadow: -5px 5px 15px rgba(0,0,0,0.1); 
+            padding: 15px; display: none; max-height: 400px; 
+            flex-direction: column; box-sizing: border-box; overflow: hidden;
+        }
+        .sidebar-panel.open { display: flex; } /* 展開時使用 flex */
+        .sidebar-header { flex-shrink: 0; display: flex; justify-content: space-between; align-items: center; margin-bottom: 10px; }
+        .sidebar-header h4 { margin: 0; font-size: 14px; }
+        .close-btn { background: none; border: none; font-size: 16px; color: #888; cursor: pointer; padding: 0 4px; line-height: 1; }
+        .close-btn:hover { color: #333; }
+
+        #member-sidebar { right: 25px; width: 260px; }
+        #group-sidebar { right: 130px; width: 200px; } 
+        
+        /* 讓成員清單與群組清單獨立滾動，不影響上方標題 */
+        #member-list, #group-list { flex-grow: 1; overflow-y: auto; padding-right: 5px; }
+        #member-list::-webkit-scrollbar, #group-list::-webkit-scrollbar { width: 6px; }
+        #member-list::-webkit-scrollbar-thumb, #group-list::-webkit-scrollbar-thumb { background: #cbd0d6; border-radius: 3px; }
+        
+        /* 側邊欄列表項目 */
+        .member-item { display: flex; align-items: center; gap: 8px; padding: 4px 8px; border-radius: 8px; transition: all 0.2s; margin-bottom: 4px; }
+        .member-item.hidden-member { opacity: 0.4; filter: grayscale(100%); }
+        .focus-toggle-area { display: flex; align-items: center; gap: 10px; flex-grow: 1; cursor: pointer; padding: 4px 6px; border-radius: 6px; transition: background 0.1s; }
+        .focus-toggle-area:hover { background: #f0f2f5; }
+        .member-avatar-mini { width: 28px; height: 28px; border-radius: 50%; border: 2px solid transparent; }
+
+        /* Tooltip 樣式 (保留原本的，不動) */
+        #custom-tooltip { position: absolute; background: rgba(255, 255, 255, 0.98); border-radius: 8px; box-shadow: 0 4px 15px rgba(0, 0, 0, 0.15); pointer-events: none; opacity: 0; z-index: 100; min-width: 240px; border: 1px solid #eee; transition: opacity 0.1s ease; }
+        .tooltip-header { background: #f8f9fa; font-weight: bold; padding: 8px; text-align: center; border-bottom: 1px solid #eee; font-size: 13px; }
+        .tooltip-row { display: flex; align-items: center; padding: 6px 12px; border-left: 4px solid transparent; }
+        .tooltip-avatar { width: 24px; height: 24px; border-radius: 50%; margin-right: 10px; }
+        .tooltip-value { font-weight: bold; font-size: 14px; margin-left: auto; }
+        .tooltip-name { font-size: 11px; color: #6c757d; flex-grow: 1; }
+        .tooltip-list-container { max-height: 520px; overflow-y: auto; }
+        .tooltip-list-container::-webkit-scrollbar { width: 6px; }
+        .tooltip-list-container::-webkit-scrollbar-thumb { background: #cbd0d6; border-radius: 3px; }
+
+        /* ✨ 解決 Google 圖示載入時會顯示英文單字的問題 (改用 Unicode) */
+        .g-icon {
+            font-family: 'Material Symbols Outlined';
+            font-weight: normal;
+            font-style: normal;
+            font-size: 20px; /* 稍微放大一點點，因為現在只有圖示沒有文字 */
+            line-height: 1;
+            display: inline-block;
+            text-transform: none;
+            -webkit-font-smoothing: antialiased;
+        }
+        /* 注入燈泡的專屬代碼 */
+        .g-icon-lightbulb::before {
+            content: "\e0f0";
+        }
+        /* 在原本的 .g-icon-lightbulb::before 下方加入這行 */
+        .g-icon-refresh::before {
+            content: "\e5d5"; /* Google Icons 的 "refresh" 代碼 */
+        }
+
+ 
+/* 統一風格 */
+#resetZoom, #clearFocusBtn {
+    background-color: #6c757d; 
+    color: white; 
+    border: none; 
+    border-radius: 6px;
+    padding: 8px 12px; 
+    cursor: pointer;
+    transition: all 0.2s;
+    display: flex; /* 預設改為 flex */
+    align-items: center;
+    justify-content: center;
+}
+
+#resetZoom:hover, #clearFocusBtn:hover {
+    background-color: #5a6268;
+}
+
+/* 高光開啟狀態 (紅色) */
+#clearFocusBtn.is-active {
+    background-color: #dc3545 !important;
+}
+
+/* 預設隱藏與否，透過 Class 控制會比 display:none 更穩健 */
+#clearFocusBtn { opacity: 0.5; pointer-events: none; }
+#clearFocusBtn.is-active { opacity: 1; pointer-events: auto; }
+
+        /* 讓圖示看起來大小一致 */
+        .g-icon {
+            font-family: 'Material Symbols Outlined';
+            font-weight: normal;
+            font-style: normal;
+            font-size: 20px; 
+            line-height: 1;
+            display: inline-block;
+            text-transform: none;
+            -webkit-font-smoothing: antialiased;
+        }
+
+    </style>
+</head>
+<body>
+
+<div class="chart-wrapper">  
+ 
+        <div class="controls">
+            <button id="groupPanelBtn" style="background-color: #6c757d; color: white; border: none;">群組篩選 ▾</button>
+            <button id="memberPanelBtn" style="background-color: #6c757d; color: white; border: none;">成員篩選 ▾</button>
+            <button id="toggleColorBtn" class="active">切換配色：個人色</button>
+            <button id="playBtn" style="background-color: #28a745; color: white; border:none;">▶ 播放</button>
+            <!-- 原本是 <button id="resetZoom">⟲ 重設視角</button> -->
+            <!-- 兩顆圖示按鈕並排 -->
+            <button id="resetZoom" title="重設視角">
+                <i class="g-icon g-icon-refresh"></i>
+            </button>
+            <button id="clearFocusBtn" title="關閉高光模式">
+                <i class="g-icon g-icon-lightbulb"></i>
+            </button>
+
+            <div class="slider-container">
+                <input type="range" id="progressRange" min="0" value="0">
+                <div class="time-display" id="timeLabel">Day 1 00:00</div>
+            </div>
+        </div>
+
+        <div id="group-sidebar" class="sidebar-panel">
+            <div class="sidebar-header">
+                <h4>群組顯示設定</h4>
+                <button class="close-btn" onclick="document.getElementById('group-sidebar').classList.remove('open')">✖</button>
+            </div>
+            <div style="margin-bottom: 10px;">
+                <button id="allGroupBtn" class="active" style="width: 100%; padding: 5px;">全選 / 全不選</button>
+            </div>
+            <div id="group-list"></div>
+        </div>
+
+        <div id="member-sidebar" class="sidebar-panel">
+            <div class="sidebar-header">
+                <h4>成員顯示設定 <span style="font-size:11px; color:#666; font-weight:normal;">(點頭像選高光)</span></h4>
+                <button class="close-btn" onclick="document.getElementById('member-sidebar').classList.remove('open')">✖</button>
+            </div>
+            <div id="member-list"></div>
+        </div>
+
+        <div class="chart-main-layout">
+            <div class="y-range-slider-wrapper">
+                <div class="y-range-slider-track" id="yRangeTrack">
+                    <div class="y-range-slider-active" id="yRangeActive"></div>
+                    <div class="range-thumb y-thumb" id="yThumbTop"></div>
+                    <div class="range-thumb y-thumb" id="yThumbBottom"></div>
+                </div>
+            </div>
+            <div class="chart-container">
+                <canvas id="myChart"></canvas>
+                <div id="custom-tooltip"></div> 
+            </div>
+        </div>
+
+        <div class="range-slider-wrapper">
+            <div class="range-slider-track" id="rangeTrack">
+                <div class="range-slider-active" id="rangeActive"></div>
+                <div class="range-thumb x-thumb" id="thumbLeft">
+                    <span class="range-label" id="labelLeft">Day 1</span>
+                </div>
+                <div class="range-thumb x-thumb" id="thumbRight">
+                    <span class="range-label" id="labelRight">Day 18</span>
+                </div>
+            </div>
+        </div>
+    </div>
+
+    <script>
+        // 全局隱藏 ID 紀錄
+        const manuallyHiddenIds = new Set();
+
+        // 1. 時間軸初始化
+        const timeRange = { start: [1, 10], end: [17, 8] };
+        const fullTimelineLabels = [];
+        const timeToIndex = {};
+
+        for (let d = 1; d <= 18; d++) {
+            for (let h = 0; h < 24; h++) {
+                const label = `Day ${d} ${h.toString().padStart(2, '0')}:00`;
+                fullTimelineLabels.push(label);
+                timeToIndex[`${d}_${h}`] = fullTimelineLabels.length - 1;
+                if (d === 18 && h === 0) break; 
+            }
+        }
+        const totalHours = fullTimelineLabels.length;
+
+        const GROUP_COLORS = { 
+            "秘密結社holoX": "#361F3C", "ID3": "#BAB9C3", "Project: HOPE": "#8C1236", 
+            "council": "#DEB232", "Advent": "#B8A0CD", "Justice": "#C7383B", 
+            "ReGLOSS": "#1D3467", "FLOW GROW": "#FE3480" 
+        };
+
+        const CHANNEL_REGISTRY = [
+          { id: "0", name: "IRyS", group: "Project: HOPE", img: "https://yt3.ggpht.com/zztv3u0fMtIbGu5nLjKPTwR_8-U0nSq80kmWW0xBpc42tA6dFHlDb_TG3VjSPLNFBuAIZtaFrw=s160-c-k-c0x00ffffff-no-rj", color: "#8C1236" },
+          { id: "1", name: "Tsukumo Sana", group: "council", img: "https://yt3.ggpht.com/bQ_VNhq6yY4PuswimicflR3TqdKul27xxDwLpf-dLuSBX77R2bjmw2XWfJnZo0ShOLaylHHZybw=s160-c-k-c0x00ffffff-no-rj", color: "#DEB232" },
+          { id: "2", name: "Ceres Fauna", group: "council", img: "https://yt3.ggpht.com/TxZ0xm54BKwYJGEoMPda7gK5iPu7Eh0CxLPM4EU9blg4m6ATy5d8NtwBVSOOZFbRdB67PtUf=s160-c-k-c0x00ffffff-no-rj", color: "#ADD198" },
+          { id: "3", name: "Ouro Kronii", group: "council", img: "https://yt3.ggpht.com/XxF6c2VtpdbRdLcldz5jp05FQY_JTfOXeVd8osfAZsxODIanpt0ymcn_6nitwydHNGek46cfZ04=s160-c-k-c0x00ffffff-no-rj", color: "#20318B" },
+          { id: "4", name: "Nanashi Mumei", group: "council", img: "https://yt3.ggpht.com/ufO7pGRu0vUfA2FLPz7yN517i8wOYxAdcxB9nSTKKfiKhjec0ulSmwWmRA00KqVpOTIesgXhMA=s160-c-k-c0x00ffffff-no-rj", color: "#B99C90" },
+          { id: "5", name: "Hakos Baelz", group: "council", img: "https://yt3.ggpht.com/sFBVGkudEnu_MCH23nJdS2oTnOzd9M7e6Mgki5JBhbj4PnjWGgG2hNmW2Vozw5rr8-K0s-DpaPs=s160-c-k-c0x00ffffff-no-rj", color: "#D72517" },
+          { id: "6", name: "ラプラス・ダークネス", group: "秘密結社holoX", img: "https://yt3.ggpht.com/6Y5lj4DhikLBo0UqIZ1dT3-D3aYXVPbxUgNTyYiyE_Se8AVxkGAn05D3oc1y3whpzDu-CzEQ=s160-c-k-c0x00ffffff-no-rj", color: "#361F3C" },
+          { id: "7", name: "鷹嶺ルイ", group: "秘密結社holoX", img: "https://yt3.ggpht.com/hoR2TgfGwUZ4mbNY07Ygu88wPLY0JcArmFKZDTwaPOtJmK78gdIg3dmp87NZM8SRBCpxlv02hg=s160-c-k-c0x00ffffff-no-rj", color: "#B84A67" },
+          { id: "8", name: "博衣こより", group: "秘密結社holoX", img: "https://yt3.ggpht.com/2PoZqbHNPXXxjPRgtAuDGY_p6use0QRNk2rN0oXPeE9NtrQGuTuD1psw6sCFDGy8fO_3JwjQPxw=s160-c-k-c0x00ffffff-no-rj", color: "#F09CC0" },
+          { id: "9", name: "沙花叉クロヱ", group: "秘密結社holoX", img: "https://yt3.ggpht.com/laCUmozlesp2wZd9k_DCDG_AYgQRGJm0yiL5pigqWAJE1TzYaOXQ6VcfEGacl8L-gpgR07I7HA=s160-c-k-c0x00ffffff-no-rj", color: "#921A1B" },
+          { id: "10", name: "風真いろは", group: "秘密結社holoX", img: "https://yt3.ggpht.com/tLcCy2CKNEUbfQ9NblN_wlYY-TzYeWcMyGkVeMSvJvIoDtPVcCpezh87MjdwaB8TcBMcKkNG=s160-c-k-c0x00ffffff-no-rj", color: "#73B5B1" },
+          { id: "11", name: "Vestia Zeta", group: "ID3", img: "https://yt3.ggpht.com/0pxwGbJZbeMVkF9wGW4FNE2vJERPo0zUkzSEFWj6IHio-uiLWMSJKdjhkqwRkWwDHNu0dXiynw=s160-c-k-c0x00ffffff-no-rj", color: "#BAB9C3" },
+          { id: "12", name: "Kaela Kovalskia", group: "ID3", img: "https://yt3.ggpht.com/2jGAglj5aTcUWO7WRNfq54KV3ipKblUzxI6fAKSjAfMw6J9Qqb6NbzbJA2i0t4cKgUR7SPdWC_w=s160-c-k-c0x00ffffff-no-rj", color: "#FF3D3D" },
+          { id: "13", name: "Kobo Kanaeru", group: "ID3", img: "https://yt3.ggpht.com/XRCP2PC-lvvielp04Eq8KyBzgd3_bFc_DNfptN5s-ftd1v6SadGuMChY6Jm3elaqaK7xwE1B=s160-c-k-c0x00ffffff-no-rj", color: "#393464" },
+          { id: "14", name: "Shiori Novella", group: "Advent", img: "https://yt3.ggpht.com/q23ZTL-eIurUV4sMNtq5pJpFXWKI7dr-XuScFGVtSiDhTR_jrs4v1BpsWX1WP51sP4jjlmA=s160-c-k-c0x00ffffff-no-rj", color: "#B8A0CD" },
+          { id: "15", name: "Koseki Bijou", group: "Advent", img: "https://yt3.ggpht.com/Wk5Mbh-5z_dbHTp7Hyz7OSd70Cz4GknlZOqiI2J_sIsnbm_YjWN2vb39XyrXBYj-uiMsOi-95w=s160-c-k-c0x00ffffff-no-rj", color: "#6E5BF4" },
+          { id: "16", name: "Nerissa Ravencroft", group: "Advent", img: "https://yt3.ggpht.com/V1Ow-KEzUUTOpE6dp3oQzxRAH1t-zwkfnlG8lGG6TbJ5SLPyfNXCSH3xAGVmaDEZfNA4xe4kJQ=s160-c-k-c0x00ffffff-no-rj", color: "#2233FB" },
+          { id: "17", name: "Fuwawa Abyssgard", group: "Advent", img: "https://yt3.ggpht.com/eC6k63zvyZma-t4NwtxhKXaP7smdQuXM6KA9r8i-ZLxnfSh5ngfAPibEAwtbFy4QEGnt_lY6lA=s160-c-k-c0x00ffffff-no-rj", color: "#F9F1E4" },
+          { id: "18", name: "火威青", group: "ReGLOSS", img: "https://yt3.ggpht.com/nVC4JesCnpLsaI14cM-c3PSecCq9MvnSiLk4V-MuLrY_OL9UYRXnXFUUUy-bCn4iub7j4V0ZOA=s160-c-k-c0x00ffffff-no-rj", color: "#1D3467" },
+          { id: "19", name: "音乃瀬奏", group: "ReGLOSS", img: "https://yt3.ggpht.com/3Naw3X40CVtAsDMP8SFCPIpsfVjP2iUID4oAF8PJgA1ob4akPZ_SQC3LlWAya_kE2INeaLtHUQ=s160-c-k-c0x00ffffff-no-rj", color: "#FFE7B5" },
+          { id: "20", name: "一条莉々華", group: "ReGLOSS", img: "https://yt3.ggpht.com/JhTtQGtkAfXG5XwH3Adzu9Kl8DBTRElKxHFvWop0Z6J2ndAEJfXfDaU1mLUaBsiAjW_RnXBkOQ=s160-c-k-c0x00ffffff-no-rj", color: "#F47DA9" },
+          { id: "21", name: "儒烏風亭らでん", group: "ReGLOSS", img: "https://yt3.ggpht.com/I3u3NWX2xNjmhVDFm7K8oLn1vZKgzZyyZ2X4_ADINsyLLXv-a2VKLXHO_uHYCKXgVSJdkazjbw=s160-c-k-c0x00ffffff-no-rj", color: "#3C7C71" },
+          { id: "22", name: "轟はじめ", group: "ReGLOSS", img: "https://yt3.ggpht.com/6vJDLc-py0cRcuDAgukgsE0SXbuia7AupgIuofdQCAidvdT_fcoy0ib6ssKI7rQO_iZO0Tb40Q=s160-c-k-c0x00ffffff-no-rj", color: "#B6BAFF" },
+          { id: "23", name: "Elizabeth Rose Bloodflame", group: "Justice", img: "https://yt3.ggpht.com/1aoKeoCGzuD7XK2U8nUIHfpynIOLecHxF7Adh09XshlrL9kne2uKGOllFcoA2iXBVVe51_V6E48=s160-c-k-c0x00ffffff-no-rj", color: "#C7383B" },
+          { id: "24", name: "Gigi Murin", group: "Justice", img: "https://yt3.ggpht.com/VTrjE6XoUY0QRq9VgwPIADiUA1S2FYPvJ7qRpUpgix8JLiU-mjKwEtADjS35w9C21Yarxk9kKA=s160-c-k-c0x00ffffff-no-rj", color: "#FDB440" },
+          { id: "25", name: "Cecilia Immergreen", group: "Justice", img: "https://yt3.ggpht.com/sSuJylnDA4Si69bKWVzwUhrOhgIkBCzGE6DHgDyHCJux8TKi7WU8GyKaKZHEN0a3QG7s2yJ399g=s160-c-k-c0x00ffffff-no-rj", color: "#119A5C" },
+          { id: "26", name: "Raora Panthera", group: "Justice", img: "https://yt3.ggpht.com/HKYI1ENbRIVyDgLVtpxOKyLAOEdOHWH__-JQu6Kj2dq0S9U-wTccKoZT0-4DBd21O0Cpo6NnlA=s160-c-k-c0x00ffffff-no-rj", color: "#F087A9" },
+          { id: "27", name: "響咲リオナ", group: "FLOW GROW", img: "https://yt3.ggpht.com/Qh8_dW2m6HrXHZowAKN7HrgvLjg3SS6cRKSbCuiKUYRW985S2WIzyp4VV9hktp97djTC7abgCQ=s160-c-k-c0x00ffffff-no-rj", color: "#FE3480" },
+          { id: "28", name: "虎金妃笑虎", group: "FLOW GROW", img: "https://yt3.ggpht.com/NCzBSNhuxkIj-n4KagMUT4AhKR08-gxci0xGQjVbfI83yUnFMjwrd5g--jHuncmVpPjrPmyc=s160-c-k-c0x00ffffff-no-rj", color: "#F58017" },
+          { id: "29", name: "水宮枢", group: "FLOW GROW", img: "https://yt3.ggpht.com/UWB7QEU9HqeEPrnRo73vuzFwN7nIeWhWgOp6B-zgY4TsuNdnffLqBGYtRTP2OSYIOjNriOCubw=s160-c-k-c0x00ffffff-no-rj", color: "#71E5FF" },
+          { id: "30", name: "輪堂千速", group: "FLOW GROW", img: "https://yt3.ggpht.com/X8_7VuMTyii7hNs6kpFf14BYGm3SA3m2Iox3EH1721IfbCkknlNEqzxCynMlxr8CyquWcmHq=s160-c-k-c0x00ffffff-no-rj", color: "#37BABA" },
+          { id: "31", name: "綺々羅々ヴィヴィ", group: "FLOW GROW", img: "https://yt3.ggpht.com/oyKoQxb9TXlAkWrQJglRHFYH4jESym1bVUzrgBsF7sxUhFYsz26jBdjZbjUPJDpV-n7zu-BnaQ=s160-c-k-c0x00ffffff-no-rj", color: "#FF90CC" }
+        ];
+
+        const EVENT_MARKERS = {
+            "0":[[5,9]], "1":[[7,1]], "2":[[7,2]], "3":[[7,4]], "4":[[7,5]], "5":[[7,7]],
+            "6":[[1,20]], "7":[[2,20]], "8":[[3,20]], "9":[[4,20]], "10":[[5,20]],
+            "11":[[2,21]], "12":[[3,21]], "13":[[4,21]], "14":[[5,11]], "15":[[5,11]],
+            "16":[[6,11]], "17":[[6,11]], "18":[[6,19]], "19":[[6,19]], "20":[[6,20]],
+            "21":[[7,19]], "22":[[7,19]], "23":[[4,11]], "24":[[4,11]], "25":[[5,11]],
+            "26":[[5,11]], "27":[[3,19]], "28":[[3,19]], "29":[[3,20]], "30":[[3,20]], "31":[[3,21]] 
+        };
+
+        // ==========================================
+        // ⚠ 請在這裡貼回您完整的 MOCK_DATA_STAGES 數據
+        // ==========================================
+const MOCK_DATA_STAGES = {
+  "0": [27200, 49400, 71500, 86000, 99000, 106000, 112000, 119000, 126000, 132000, 139000, 145000, 151000, 153000, 155000, 157000, 159000, 161000, 163000, 165000, 167000, 169000, 200000, 202000, 206000, 207000, 209000, 210000, 211000, 212000, 213000, 214000, 215000, 216000, 217000, 218000, 219000, 220000, 220000, 221000, 221000, 222000, 222000, 223000, 223000, 224000, 224000, 225000, 225000, 226000, 227000, 227000, 228000, 228000, 229000, 229000, 230000, 231000, 231000, 232000, 232000, 233000, 233000, 234000, 234000, 235000, 235000, 236000, 236000, 237000, 238000, 238000, 239000, 239000, 240000, 241000, 241000, 242000, 243000, 243000, 244000, 245000, 245000, 246000, 247000, 248000, 249000, 250000, 251000, 252000, 253000, 254000, 255000, 257000, 263000, 274000, 287000, 300000, 310000, 317000, 325000, 331000, 336000, 340000, 344000, 347000, 351000, 355000, 359000, 362000, 365000, 368000, 371000, 374000, 377000, 380000, 383000, 386000, 388000, 391000, 394000, 397000, 400000, 403000, 406000, 408000, 409000, 410000, 412000, 413000, 414000, 416000, 417000, 419000, 420000, 421000, 422000, 423000, 424000, 425000, 426000, 427000, 428000, 429000, 430000, 431000, 433000, 434000, 435000, 436000, 437000, 438000, 439000, 440000, 441000, 442000, 443000, 445000, 445000, 446000, 447000, 448000, 448000, 449000, 450000, 451000, 451000, 452000, 453000, 454000, 454000, 455000, 456000, 457000, 457000, 458000, 459000, 460000, 460000, 461000, 462000, 463000, 463000, 464000, 464000, 465000, 466000, 466000, 467000, 468000, 468000, 469000, 469000, 470000, 471000, 471000, 472000, 473000, 473000, 474000, 474000, 475000, 476000, 476000, 477000, 478000, 478000, 478000, 479000, 479000, 480000, 480000, 480000, 481000, 481000, 482000, 482000, 482000, 483000, 483000, 484000, 484000, 485000, 485000, 485000, 486000, 486000, 487000, 487000, 488000, 488000, 488000, 488000, 488000, 489000, 489000, 489000, 489000, 490000, 490000, 490000, 490000, 491000, 491000, 491000, 491000, 492000, 492000, 492000, 492000, 493000, 493000, 493000, 493000, 493000, 493000, 493000, 494000, 494000, 494000, 495000, 495000, 495000, 495000, 496000, 496000, 496000, 497000, 497000, 497000, 497000, 498000, 498000, 498000, 499000, 499000, 499000, 500000, 500250.00000000047, 500500.00000000047, 500750.00000000047, 501000.00000000047, 501250.00000000047, 501500.00000000047, 501750.00000000047, 502000.00000000047, 502250.00000000047, 502500.00000000047, 502750.00000000047, 503000.00000000047, 503250.00000000047, 503500.00000000047, 503750.00000000047, 504000.00000000047, 504250.00000000047, 504500.00000000047, 504750.00000000047, 505000.00000000047, 505250.00000000047, 505500.00000000047, 505750.00000000047, 506000.00000000047, 506000, 506000, 506000, 506000, 507000, 507000, 507000, 507000, 507000, 508000, 508000, 508000, 508000, 508000, 509000, 509000, 509000, 509000, 509000, 510000, 510000, 510000, 510000, 511000, 511000, 511000, 511000, 511000, 511000, 511000, 511000, 512000, 512000, 512000, 512000, 512000, 512000, 512000, 512000, 513000, 513000, 513000, 513000, 513000, 513000, 513000, 513000, 514000, 514000, 514000, 514000, 514000, 514000, 515000, 515000, 515000, 515000, 515000, 515000, 516000, 516000, 516000, 516000, 516000, 516000, 517000, 517000, 517000, 517000, 517000, 517000, 518000, 518000, 518000, 518000, 518000, 518000, 518000, 518000, 518000, 518000],
+  "1": [22500, 32400, 39000, 47400, 49600, 53700, 57200, 60300, 63700, 66600, 69500, 72200, 74800, 76900, 79100, 81100, 82700, 84100, 85400, 86600, 87800, 89100, 90500, 92200, 93800, 95200, 96400, 97900, 99000, 100000, 101000, 102000, 103000, 104000, 105000, 106000, 107000, 108000, 109000, 110000, 110000, 111000, 112000, 112000, 113000, 114000, 115000, 67000, 55700, 56700, 57800, 58400, 59200, 60000, 55700, 56300, 56900, 57400, 58100, 58700, 59200, 59700, 60300, 60800, 61300, 61700, 62000, 62500, 62700, 63000, 63300, 34500, 35300, 36000, 36500, 37300, 38300, 39100, 39800, 40500, 39200, 37600, 38100, 38700, 39400, 40000, 40800, 41500, 42200, 42900, 43400, 44000, 44500, 43600, 42400, 43000, 31800, 32500, 33400, 34100, 34900, 35800, 36400, 37400, 38700, 40200, 41800, 40600, 42400, 44100, 45600, 47300, 49100, 50200, 50800, 51400, 52000, 52600, 51100, 46900, 47400, 47900, 48500, 49000, 49500, 49900, 50400, 51400, 49700, 50800, 51800, 53000, 54200, 56100, 59000, 65100, 88000, 101000, 109000, 116000, 123000, 124000, 131000, 139000, 130000, 136000, 140000, 144000, 148000, 147000, 150000, 152000, 154000, 156000, 158000, 161000, 163000, 165000, 167000, 169000, 171000, 173000, 174000, 175000, 174000, 162000, 163000, 156000, 158000, 159000, 160000, 161000, 162000, 163000, 163000, 164000, 165000, 166000, 167000, 168000, 169000, 170000, 170000, 161000, 162000, 162000, 163000, 163000, 164000, 165000, 165000, 97800, 99100, 100000, 101000, 102000, 103000, 104000, 101000, 102000, 102000, 103000, 103000, 104000, 104000, 105000, 105000, 106000, 106000, 107000, 107000, 107000, 108000, 108000, 108000, 107000, 109000, 110000, 111000, 112000, 112000, 113000, 113000, 113000, 114000, 114000, 114000, 115000, 115000, 115000, 116000, 116000, 116000, 117000, 117000, 117000, 117000, 117000, 117000, 117000, 117000, 117000, 118000, 118000, 119000, 119000, 119000, 120000, 120000, 120000, 120000, 121000, 121000, 121000, 122000, 122000, 122000, 122000, 123000, 123000, 123000, 123000, 123000, 122000, 123000, 123000, 123000, 123000, 124000, 124000, 124000, 124000, 125000, 125000, 125000, 125000, 125000, 125000, 126000, 126000, 126000, 126000, 126000, 126000, 126000, 127000, 127000, 126000, 126000, 127000, 127000, 128000, 128000, 128000, 128000, 128000, 128000, 128000, 129000, 129000, 129000, 129000, 129000, 129000, 130000, 130000, 130000, 130000, 130000, 130000, 130000, 130000, 130000, 131000, 131000, 132000, 132000, 132000, 132000, 132000, 132000, 132000, 133000, 133000, 133000, 133000, 133000, 133000, 133000, 134000, 134000, 134000, 134000, 134000, 134000, 134000, 134000, 134000, 134000, 135000, 135000, 135000, 135000, 135000, 135000, 135000, 136000, 136000, 136000, 136000, 136000, 136000, 137000, 137000, 137000, 137000, 137000, 137000, 137000, 137000, 137000, 137000, 137000, 138000, 138000, 138000, 138000, 139000, 139000, 139000, 139000, 139000, 139000, 139000, 139000, 139000, 140000, 140000, 140000, 140000, 140000, 140000, 140000],
+  "2": [23700, 34500, 41600, 48700, 52600, 56900, 60700, 64000, 67500, 70600, 73500, 76300, 79100, 81500, 83900, 86100, 87800, 89400, 90800, 92100, 93400, 94900, 96400, 98200, 99000, 101000, 102000, 104000, 105000, 106000, 107000, 109000, 110000, 111000, 112000, 114000, 115000, 116000, 117000, 117000, 118000, 119000, 120000, 121000, 121000, 122000, 123000, 75400, 64100, 65200, 66500, 67200, 68000, 69000, 64800, 65500, 66100, 66700, 67400, 68100, 68700, 69200, 69800, 70400, 70900, 71300, 71700, 72200, 72500, 72700, 73100, 43900, 44700, 45500, 46100, 46900, 48000, 48800, 49700, 50300, 49100, 47400, 48000, 48700, 49400, 50000, 50900, 51600, 52400, 53100, 53700, 54300, 54900, 54000, 52700, 53400, 42400, 43200, 44100, 44800, 45700, 46600, 47200, 48300, 49600, 51100, 52700, 51500, 53300, 55100, 56600, 58300, 60100, 61300, 62000, 62700, 63400, 64100, 62400, 58400, 59000, 59600, 60200, 60800, 61300, 61800, 62300, 63400, 61700, 62900, 64000, 65200, 66600, 68500, 71300, 76600, 89500, 111000, 131000, 139000, 149000, 151000, 161000, 170000, 162000, 169000, 175000, 180000, 184000, 185000, 188000, 191000, 194000, 197000, 200000, 203000, 206000, 209000, 212000, 215000, 217000, 219000, 221000, 222000, 221000, 210000, 213000, 207000, 208000, 210000, 211000, 213000, 214000, 215000, 216000, 217000, 219000, 220000, 221000, 222000, 224000, 225000, 226000, 217000, 218000, 219000, 219000, 220000, 221000, 222000, 224000, 156000, 157000, 158000, 159000, 160000, 161000, 162000, 159000, 160000, 161000, 162000, 162000, 163000, 164000, 165000, 165000, 166000, 167000, 167000, 168000, 169000, 170000, 170000, 170000, 171000, 171000, 172000, 173000, 174000, 174000, 175000, 175000, 176000, 176000, 176000, 177000, 178000, 178000, 179000, 179000, 180000, 180000, 180000, 181000, 181000, 181000, 181000, 181000, 181000, 181000, 181000, 182000, 182000, 183000, 183000, 183000, 184000, 184000, 184000, 185000, 185000, 185000, 186000, 186000, 186000, 187000, 187000, 187000, 187000, 188000, 189000, 189000, 189000, 189000, 189000, 190000, 190000, 191000, 191000, 191000, 192000, 192000, 192000, 192000, 193000, 193000, 193000, 194000, 194000, 194000, 195000, 195000, 195000, 195000, 195000, 196000, 195000, 195000, 196000, 197000, 197000, 197000, 197000, 198000, 198000, 198000, 198000, 198000, 199000, 199000, 199000, 199000, 200000, 200000, 200000, 200000, 200000, 201000, 201000, 201000, 201000, 202000, 202000, 202000, 202000, 203000, 203000, 203000, 203000, 204000, 204000, 204000, 204000, 205000, 205000, 205000, 205000, 205000, 206000, 206000, 206000, 206000, 207000, 207000, 208000, 208000, 208000, 209000, 209000, 209000, 209000, 209000, 210000, 210000, 210000, 210000, 210000, 211000, 211000, 211000, 211000, 211000, 212000, 212000, 212000, 212000, 212000, 213000, 213000, 213000, 213000, 214000, 214000, 214000, 214000, 214000, 214000, 215000, 215000, 215000, 215000, 215000, 215000, 216000, 216000, 216000, 216000, 216000, 216000, 216000, 216000, 216000],
+  "3": [23800, 34600, 41700, 44600, 53000, 57500, 61400, 64800, 68600, 71700, 74900, 77700, 80600, 82900, 85300, 87400, 89100, 90700, 92100, 93400, 94700, 96100, 97700, 99200, 100000, 102000, 103000, 105000, 106000, 107000, 108000, 110000, 111000, 112000, 113000, 114000, 116000, 117000, 118000, 119000, 120000, 120000, 121000, 121000, 122000, 123000, 124000, 76700, 65300, 66400, 67700, 68500, 69300, 70300, 66100, 66800, 67500, 68100, 68800, 69500, 70100, 70600, 71200, 71800, 72400, 72800, 73200, 73700, 74000, 74300, 74700, 45000, 45900, 46700, 47300, 48100, 49200, 50100, 50900, 51600, 50400, 48900, 49500, 50200, 50900, 51600, 52400, 53200, 54000, 54700, 55300, 55900, 56500, 55600, 54400, 55100, 44600, 45400, 46400, 47100, 47900, 48900, 49600, 50600, 52100, 53600, 55400, 54300, 56200, 58000, 59500, 61300, 63000, 64200, 64900, 65600, 66300, 67000, 65300, 61300, 61900, 62500, 63100, 63700, 64200, 64700, 65200, 66300, 64700, 65800, 67000, 68200, 69600, 71500, 74300, 79600, 92100, 102000, 112000, 136000, 148000, 151000, 162000, 174000, 165000, 174000, 181000, 188000, 193000, 195000, 199000, 203000, 207000, 210000, 214000, 218000, 222000, 226000, 230000, 233000, 236000, 240000, 243000, 245000, 246000, 234000, 236000, 233000, 235000, 237000, 239000, 242000, 244000, 245000, 247000, 249000, 251000, 252000, 254000, 257000, 258000, 260000, 262000, 253000, 254000, 255000, 256000, 257000, 258000, 259000, 260000, 192000, 194000, 195000, 197000, 200000, 203000, 205000, 203000, 204000, 205000, 206000, 207000, 208000, 209000, 211000, 211000, 212000, 213000, 214000, 215000, 215000, 216000, 216000, 217000, 216000, 218000, 219000, 220000, 221000, 223000, 224000, 225000, 226000, 227000, 227000, 228000, 229000, 230000, 231000, 232000, 233000, 234000, 235000, 235000, 236000, 236000, 236000, 236000, 236000, 237000, 237000, 238000, 238000, 239000, 240000, 240000, 241000, 242000, 242000, 243000, 243000, 244000, 245000, 245000, 246000, 246000, 247000, 247000, 248000, 248000, 248000, 248000, 248000, 248000, 249000, 250000, 252000, 253000, 253000, 254000, 255000, 255000, 256000, 256000, 257000, 258000, 258000, 259000, 259000, 260000, 260000, 260000, 261000, 261000, 261000, 261000, 262000, 262000, 264000, 265000, 265000, 266000, 266000, 266000, 267000, 267000, 267000, 268000, 268000, 269000, 269000, 269000, 270000, 270000, 270000, 270000, 271000, 271000, 271000, 271000, 271000, 272000, 272000, 272000, 272000, 273000, 273000, 273000, 273000, 274000, 274000, 274000, 274000, 275000, 275000, 275000, 276000, 276000, 276000, 276000, 277000, 277000, 277000, 277000, 278000, 278000, 278000, 279000, 279000, 279000, 279000, 280000, 280000, 280000, 280000, 280000, 281000, 281000, 281000, 282000, 282000, 282000, 282000, 282000, 282000, 283000, 283000, 283000, 283000, 283000, 283000, 284000, 284000, 284000, 285000, 285000, 285000, 285000, 285000, 286000, 286000, 286000, 286000, 286000, 287000, 287000, 287000, 287000, 287000, 287000, 287000, 288000],
+  "4": [24100, 35200, 42500, 47700, 54100, 58700, 62800, 66300, 70100, 73300, 76400, 79300, 82200, 84600, 87100, 89300, 91000, 92600, 94000, 95400, 96700, 98200, 99700, 101000, 103000, 105000, 106000, 108000, 109000, 110000, 111000, 113000, 114000, 115000, 116000, 117000, 119000, 121000, 122000, 122000, 123000, 123000, 124000, 125000, 126000, 126000, 127000, 79800, 68500, 69600, 71000, 71800, 72600, 73700, 69500, 70200, 70900, 71500, 72300, 73000, 73600, 74200, 74800, 75400, 75900, 76400, 76800, 77300, 77600, 77900, 78300, 50600, 51400, 52300, 52900, 53700, 54900, 55900, 56700, 57400, 56200, 54700, 55200, 55900, 56700, 57400, 58300, 59100, 59800, 60600, 61200, 61900, 62500, 61700, 60500, 61300, 49000, 49800, 50900, 52300, 52600, 53700, 54400, 55500, 56900, 58500, 60300, 59200, 61200, 63000, 64700, 66500, 68400, 69700, 70400, 71100, 71800, 72500, 71000, 67100, 67700, 68300, 69000, 69700, 70300, 70800, 71400, 72600, 71100, 72300, 73500, 74900, 76300, 78400, 81300, 86700, 99400, 110000, 118000, 125000, 142000, 148000, 164000, 175000, 166000, 174000, 180000, 186000, 191000, 192000, 196000, 199000, 203000, 206000, 209000, 212000, 216000, 219000, 222000, 225000, 227000, 229000, 231000, 232000, 232000, 220000, 222000, 217000, 219000, 220000, 222000, 223000, 225000, 226000, 227000, 228000, 229000, 231000, 232000, 234000, 235000, 236000, 238000, 229000, 230000, 231000, 232000, 234000, 235000, 237000, 238000, 169000, 171000, 172000, 174000, 175000, 177000, 178000, 175000, 176000, 177000, 178000, 179000, 180000, 181000, 181000, 182000, 183000, 184000, 184000, 185000, 186000, 186000, 187000, 187000, 187000, 188000, 189000, 190000, 190000, 191000, 192000, 192000, 193000, 194000, 194000, 195000, 195000, 196000, 196000, 197000, 198000, 198000, 199000, 199000, 199000, 199000, 200000, 199000, 199000, 199000, 200000, 200000, 201000, 201000, 202000, 202000, 202000, 203000, 203000, 204000, 204000, 205000, 205000, 205000, 206000, 206000, 206000, 207000, 208000, 208000, 209000, 208000, 208000, 209000, 209000, 209000, 210000, 210000, 211000, 211000, 212000, 212000, 212000, 213000, 213000, 213000, 214000, 214000, 214000, 215000, 215000, 215000, 215000, 216000, 216000, 216000, 216000, 216000, 217000, 217000, 218000, 218000, 218000, 218000, 219000, 219000, 219000, 219000, 220000, 220000, 220000, 221000, 221000, 221000, 221000, 222000, 222000, 222000, 222000, 222000, 222000, 222000, 223000, 223000, 223000, 223000, 223000, 224000, 224000, 224000, 224000, 224000, 225000, 225000, 225000, 225000, 225000, 226000, 226000, 226000, 226000, 226000, 226000, 226000, 227000, 227000, 228000, 229000, 229000, 229000, 230000, 230000, 230000, 231000, 231000, 231000, 231000, 232000, 232000, 232000, 232000, 233000, 233000, 233000, 233000, 234000, 234000, 234000, 234000, 234000, 234000, 235000, 235000, 235000, 235000, 236000, 236000, 236000, 236000, 236000, 236000, 237000, 237000, 237000, 237000, 237000, 237000, 238000, 238000, 238000, 238000, 238000],
+  "5": [24700, 36000, 43500, 49800, 55300, 59800, 63800, 67300, 71100, 74400, 77600, 80600, 83500, 85900, 88300, 90600, 92500, 93900, 95400, 96700, 98100, 99500, 101000, 102000, 104000, 106000, 107000, 109000, 110000, 111000, 112000, 114000, 115000, 116000, 117000, 118000, 120000, 122000, 123000, 123000, 124000, 124000, 125000, 126000, 127000, 127000, 128000, 80900, 69400, 70500, 71800, 72600, 73400, 74300, 70200, 70900, 71500, 72100, 72800, 73500, 74100, 74700, 75300, 75800, 76400, 76800, 77200, 77600, 78000, 78300, 78600, 51300, 52100, 52900, 53500, 54300, 55000, 56400, 57200, 57900, 56700, 55200, 55700, 56400, 57200, 57800, 58700, 59500, 60300, 61000, 61700, 62200, 62900, 62000, 60800, 61400, 48800, 49500, 50500, 51800, 52000, 53000, 53600, 54700, 56000, 57600, 59200, 58000, 59800, 61600, 63100, 64800, 66600, 67800, 68500, 69200, 69900, 70600, 69000, 64900, 65500, 66100, 66700, 67300, 67900, 68300, 68800, 70000, 68300, 69400, 70600, 71800, 73200, 75100, 77800, 83000, 95300, 105000, 113000, 120000, 128000, 132000, 150000, 144000, 155000, 163000, 169000, 175000, 180000, 180000, 184000, 187000, 191000, 194000, 199000, 202000, 205000, 209000, 212000, 214000, 216000, 218000, 219000, 221000, 220000, 208000, 210000, 208000, 210000, 211000, 213000, 214000, 216000, 217000, 218000, 219000, 220000, 221000, 223000, 225000, 226000, 228000, 229000, 220000, 221000, 222000, 222000, 223000, 223000, 224000, 225000, 157000, 158000, 159000, 160000, 161000, 162000, 163000, 161000, 162000, 162000, 163000, 164000, 164000, 165000, 166000, 167000, 168000, 168000, 169000, 169000, 170000, 170000, 170000, 171000, 171000, 171000, 172000, 172000, 173000, 174000, 174000, 174000, 175000, 175000, 176000, 176000, 177000, 178000, 179000, 179000, 180000, 180000, 181000, 181000, 181000, 181000, 182000, 181000, 181000, 181000, 181000, 182000, 182000, 183000, 183000, 183000, 184000, 184000, 185000, 185000, 186000, 187000, 187000, 187000, 188000, 188000, 188000, 188000, 189000, 189000, 189000, 189000, 189000, 189000, 189000, 190000, 190000, 191000, 191000, 191000, 192000, 192000, 192000, 193000, 193000, 193000, 194000, 194000, 194000, 194000, 195000, 195000, 195000, 195000, 195000, 195000, 195000, 195000, 196000, 197000, 197000, 197000, 197000, 198000, 198000, 198000, 198000, 198000, 199000, 199000, 199000, 199000, 199000, 200000, 200000, 200000, 200000, 200000, 200000, 200000, 200000, 200000, 201000, 201000, 201000, 201000, 201000, 202000, 202000, 202000, 202000, 202000, 203000, 203000, 203000, 204000, 204000, 204000, 204000, 204000, 204000, 204000, 205000, 204000, 205000, 205000, 205000, 205000, 205000, 206000, 206000, 206000, 206000, 206000, 206000, 207000, 207000, 207000, 207000, 207000, 207000, 208000, 208000, 208000, 208000, 208000, 208000, 208000, 208000, 208000, 209000, 209000, 210000, 210000, 210000, 210000, 211000, 211000, 211000, 211000, 211000, 211000, 212000, 212000, 212000, 212000, 212000, 212000, 212000, 213000, 213000, 213000],
+  "6": [, , 26800, 42000, 57400, 71400, 84000, 95700, 111000, 129000, 152000, 202000, 226000, 246000, 262000, 272000, 280000, 286000, 290000, 294000, 298000, 280000, 286000, 292000, 299000, 305000, 315000, 320000, 325000, 329000, 333000, 338000, 342000, 347000, 351000, 359000, 362000, 367000, 374000, 377000, 380000, 382000, 383000, 384000, 385000, 362000, 364000, 342000, 344000, 347000, 349000, 352000, 348000, 349000, 351000, 353000, 355000, 358000, 360000, 363000, 367000, 369000, 371000, 373000, 375000, 376000, 376000, 377000, 377000, 374000, 375000, 376000, 330000, 332000, 334000, 336000, 338000, 339000, 341000, 343000, 345000, 347000, 349000, 352000, 355000, 357000, 359000, 361000, 362000, 362000, 363000, 364000, 364000, 363000, 364000, 365000, 366000, 367000, 368000, 368000, 369000, 370000, 371000, 372000, 373000, 374000, 375000, 377000, 383000, 386000, 389000, 393000, 394000, 395000, 396000, 396000, 397000, 398000, 398000, 398000, 399000, 400000, 401000, 402000, 403000, 404000, 405000, 406000, 407000, 409000, 414000, 417000, 419000, 421000, 426000, 428000, 429000, 429000, 430000, 430000, 431000, 430000, 431000, 431000, 433000, 433000, 434000, 435000, 435000, 436000, 437000, 438000, 439000, 440000, 441000, 443000, 445000, 448000, 450000, 453000, 454000, 454000, 454000, 455000, 455000, 456000, 457000, 457000, 457000, 458000, 459000, 459000, 460000, 461000, 461000, 462000, 463000, 464000, 465000, 466000, 468000, 469000, 470000, 471000, 471000, 472000, 472000, 472000, 473000, 473000, 474000, 474000, 475000, 475000, 477000, 479000, 480000, 481000, 481000, 482000, 483000, 484000, 484000, 485000, 486000, 486000, 487000, 488000, 488000, 488000, 489000, 489000, 489000, 489000, 490000, 490000, 490000, 491000, 491000, 492000, 492000, 493000, 493000, 494000, 494000, 495000, 496000, 497000, 499000, 501000, 502000, 502000, 503000, 503000, 503000, 503000, 503000, 505000, 505000, 506000, 506000, 506000, 507000, 507000, 507000, 508000, 508000, 508000, 509000, 509000, 509000, 510000, 511000, 511000, 512000, 512000, 512000, 512000, 513000, 513000, 513000, 513000, 513000, 513000, 513000, 514000, 514000, 514000, 514000, 515000, 515000, 515000, 516000, 516000, 516000, 518000, 519000, 520000, 521000, 521000, 521000, 521000, 521000, 521000, 522000, 522000, 522000, 523000, 523000, 523000, 523000, 523000, 524000, 524000, 524000, 525000, 525000, 528000, 528000, 529000, 529000, 530000, 530000, 531000, 531000, 531000, 531000, 531000, 531000, 532000, 532000, 532000, 532000, 532000, 532000, 533000, 533000, 533000, 533000, 533000, 534000, 534000, 534000, 535000, 535000, 536000, 537000, 537000, 537000, 537000, 537000, 537000, 537000, 537000, 537000, 538000, 538000, 538000, 538000, 538000, 538000, 538000, 539000, 539000, 540000, 540000, 540000, 541000, 541000, 541000, 542000, 542000, 543000, 543000, 543000, 543000, 543000, 543000, 543000, 543000, 544000, 544000, 544000, 544000, 545000, 545000, 545000, 546000, 546000, 546000, 546000, 547000, 547000, 547000, 548000, 548000, 548000, 548000, 548000, 548000, 548000, 548000, 549000],
+  "7": [, , 23800, 37100, 48600, 58400, 67600, 76200, 86000, 96100, 108000, 122000, 131000, 138000, 143000, 146000, 149000, 151000, 152000, 154000, 155000, 134000, 136000, 138000, 140000, 142000, 133000, 135000, 137000, 139000, 141000, 143000, 146000, 150000, 160000, 194000, 203000, 213000, 226000, 231000, 235000, 238000, 240000, 241000, 243000, 221000, 223000, 199000, 202000, 204000, 207000, 210000, 206000, 208000, 210000, 212000, 214000, 216000, 218000, 221000, 224000, 226000, 229000, 230000, 231000, 232000, 232000, 233000, 233000, 229000, 230000, 230000, 184000, 185000, 186000, 187000, 188000, 189000, 190000, 191000, 192000, 193000, 194000, 196000, 199000, 201000, 203000, 204000, 205000, 206000, 206000, 207000, 207000, 207000, 207000, 208000, 209000, 209000, 210000, 211000, 212000, 213000, 214000, 215000, 216000, 217000, 218000, 220000, 223000, 226000, 228000, 229000, 230000, 230000, 231000, 231000, 231000, 232000, 232000, 232000, 232000, 233000, 234000, 236000, 238000, 239000, 239000, 240000, 241000, 242000, 244000, 245000, 247000, 249000, 250000, 251000, 252000, 252000, 253000, 253000, 253000, 253000, 253000, 253000, 253000, 254000, 254000, 255000, 256000, 256000, 257000, 257000, 258000, 259000, 262000, 264000, 266000, 267000, 268000, 269000, 270000, 270000, 271000, 271000, 271000, 272000, 272000, 272000, 272000, 272000, 274000, 275000, 275000, 276000, 276000, 277000, 278000, 278000, 279000, 279000, 280000, 281000, 282000, 283000, 283000, 283000, 284000, 284000, 284000, 284000, 285000, 285000, 285000, 286000, 286000, 287000, 287000, 289000, 289000, 290000, 290000, 291000, 291000, 292000, 292000, 293000, 293000, 293000, 294000, 294000, 294000, 294000, 294000, 294000, 295000, 294000, 294000, 295000, 295000, 296000, 296000, 296000, 297000, 297000, 297000, 298000, 298000, 299000, 299000, 300000, 301000, 302000, 302000, 302000, 302000, 302000, 302000, 303000, 303000, 303000, 303000, 303000, 304000, 304000, 304000, 304000, 305000, 305000, 305000, 305000, 306000, 307000, 308000, 309000, 309000, 310000, 310000, 310000, 310000, 310000, 310000, 310000, 311000, 311000, 311000, 311000, 311000, 311000, 312000, 312000, 312000, 312000, 313000, 313000, 313000, 313000, 315000, 315000, 316000, 316000, 316000, 316000, 316000, 316000, 316000, 317000, 317000, 317000, 317000, 317000, 317000, 317000, 318000, 318000, 318000, 318000, 318000, 319000, 319000, 319000, 320000, 321000, 321000, 321000, 321000, 322000, 322000, 322000, 322000, 322000, 322000, 322000, 322000, 322000, 322000, 322000, 323000, 323000, 323000, 323000, 323000, 323000, 323000, 324000, 324000, 325000, 325000, 325000, 326000, 326000, 326000, 326000, 326000, 326000, 326000, 326000, 326000, 326000, 326000, 326000, 326000, 327000, 327000, 327000, 327000, 327000, 328000, 328000, 328000, 328000, 329000, 329000, 329000, 329000, 329000, 329000, 329000, 329000, 329000, 329000, 329000, 330000, 330000, 330000, 330000, 330000, 331000, 331000, 331000, 331000, 331000, 331000, 331000, 332000, 332000, 332000, 332000, 332000, 332000, 332000, 333000, 333000, 333000],
+  "8": [, , 24400, 38500, 50500, 60800, 70300, 79100, 89100, 99600, 111000, 125000, 134000, 140000, 145000, 149000, 151000, 154000, 155000, 156000, 158000, 137000, 139000, 141000, 143000, 145000, 136000, 137000, 139000, 140000, 142000, 144000, 145000, 148000, 151000, 158000, 160000, 164000, 170000, 173000, 175000, 176000, 177000, 178000, 179000, 156000, 158000, 124000, 126000, 128000, 130000, 131000, 127000, 128000, 130000, 131000, 133000, 137000, 147000, 188000, 203000, 212000, 221000, 226000, 229000, 231000, 232000, 233000, 235000, 232000, 233000, 234000, 204000, 205000, 207000, 209000, 210000, 211000, 213000, 215000, 217000, 219000, 223000, 226000, 231000, 234000, 237000, 238000, 239000, 240000, 241000, 242000, 242000, 242000, 242000, 244000, 245000, 246000, 247000, 248000, 249000, 249000, 250000, 251000, 252000, 254000, 255000, 257000, 261000, 267000, 270000, 272000, 273000, 274000, 275000, 275000, 276000, 276000, 277000, 277000, 277000, 278000, 281000, 283000, 284000, 285000, 286000, 287000, 288000, 291000, 294000, 295000, 297000, 298000, 299000, 300000, 301000, 301000, 302000, 302000, 302000, 303000, 303000, 304000, 304000, 305000, 306000, 306000, 307000, 307000, 308000, 309000, 309000, 310000, 311000, 312000, 314000, 315000, 319000, 321000, 321000, 321000, 322000, 322000, 322000, 323000, 323000, 324000, 323000, 324000, 324000, 325000, 326000, 326000, 326000, 327000, 328000, 329000, 329000, 331000, 333000, 334000, 335000, 335000, 336000, 336000, 336000, 337000, 337000, 337000, 337000, 338000, 338000, 339000, 339000, 340000, 341000, 341000, 342000, 342000, 343000, 343000, 344000, 344000, 345000, 346000, 347000, 347000, 348000, 348000, 348000, 348000, 348000, 349000, 349000, 349000, 349000, 350000, 350000, 351000, 351000, 351000, 352000, 352000, 354000, 357000, 357000, 358000, 358000, 359000, 359000, 359000, 360000, 360000, 360000, 360000, 360000, 361000, 361000, 361000, 361000, 362000, 362000, 362000, 362000, 363000, 363000, 363000, 363000, 363000, 364000, 364000, 364000, 365000, 365000, 365000, 366000, 366000, 366000, 366000, 366000, 366000, 367000, 367000, 367000, 367000, 367000, 367000, 367000, 368000, 368000, 368000, 368000, 369000, 369000, 370000, 371000, 371000, 371000, 372000, 372000, 372000, 372000, 372000, 372000, 372000, 372000, 373000, 373000, 373000, 373000, 373000, 373000, 373000, 374000, 374000, 374000, 375000, 376000, 376000, 376000, 377000, 377000, 377000, 377000, 377000, 377000, 377000, 377000, 378000, 378000, 378000, 378000, 378000, 378000, 378000, 378000, 378000, 378000, 379000, 379000, 379000, 379000, 380000, 380000, 381000, 381000, 381000, 381000, 381000, 381000, 382000, 382000, 382000, 382000, 382000, 382000, 382000, 382000, 382000, 382000, 382000, 383000, 383000, 383000, 383000, 383000, 384000, 384000, 384000, 384000, 384000, 385000, 385000, 385000, 385000, 385000, 385000, 385000, 385000, 385000, 385000, 386000, 386000, 386000, 386000, 386000, 387000, 387000, 387000, 387000, 387000, 387000, 388000, 389000, 389000, 389000, 389000, 389000, 389000, 389000, 390000, 390000],
+  "9": [, , 24000, 37700, 49400, 59600, 69000, 78000, 88100, 98400, 110000, 124000, 132000, 139000, 144000, 147000, 150000, 152000, 154000, 156000, 157000, 136000, 138000, 140000, 142000, 144000, 134000, 136000, 137000, 139000, 140000, 142000, 144000, 147000, 151000, 158000, 160000, 164000, 168000, 170000, 172000, 173000, 174000, 175000, 176000, 153000, 154000, 121000, 122000, 123000, 124000, 126000, 121000, 122000, 123000, 124000, 126000, 127000, 129000, 132000, 134000, 136000, 137000, 138000, 139000, 140000, 140000, 140000, 141000, 137000, 137000, 137000, 90800, 91600, 92500, 93400, 94200, 94900, 95900, 97100, 98600, 102000, 110000, 153000, 180000, 198000, 217000, 227000, 233000, 237000, 241000, 245000, 249000, 252000, 256000, 286000, 289000, 293000, 297000, 300000, 304000, 307000, 310000, 314000, 318000, 321000, 325000, 329000, 335000, 340000, 344000, 349000, 351000, 353000, 354000, 356000, 357000, 358000, 359000, 362000, 363000, 364000, 367000, 369000, 370000, 371000, 373000, 375000, 377000, 380000, 393000, 396000, 400000, 404000, 407000, 413000, 417000, 418000, 419000, 420000, 421000, 421000, 422000, 423000, 425000, 427000, 428000, 430000, 431000, 432000, 434000, 435000, 437000, 439000, 442000, 449000, 454000, 457000, 459000, 460000, 461000, 462000, 462000, 463000, 464000, 468000, 469000, 470000, 471000, 472000, 473000, 475000, 476000, 477000, 478000, 479000, 480000, 481000, 482000, 483000, 485000, 486000, 487000, 492000, 494000, 495000, 495000, 496000, 496000, 498000, 501000, 503000, 504000, 505000, 507000, 508000, 509000, 511000, 512000, 513000, 515000, 516000, 517000, 518000, 520000, 522000, 523000, 524000, 525000, 526000, 527000, 527000, 527000, 528000, 529000, 529000, 533000, 534000, 535000, 536000, 537000, 538000, 538000, 539000, 540000, 541000, 542000, 544000, 546000, 547000, 548000, 548000, 549000, 549000, 549000, 550000, 550000, 550000, 551000, 553000, 554000, 554000, 555000, 555000, 556000, 556000, 557000, 557000, 558000, 558000, 559000, 560000, 560000, 561000, 562000, 563000, 564000, 564000, 565000, 565000, 565000, 566000, 566000, 566000, 566000, 567000, 567000, 568000, 568000, 568000, 569000, 569000, 570000, 570000, 571000, 571000, 573000, 574000, 574000, 575000, 576000, 576000, 576000, 576000, 577000, 577000, 577000, 577000, 578000, 578000, 578000, 578000, 579000, 579000, 579000, 581000, 583000, 584000, 584000, 585000, 585000, 586000, 586000, 587000, 587000, 587000, 587000, 588000, 588000, 588000, 588000, 589000, 589000, 589000, 589000, 590000, 590000, 590000, 590000, 591000, 591000, 591000, 592000, 592000, 593000, 594000, 595000, 595000, 596000, 596000, 596000, 596000, 596000, 596000, 597000, 597000, 597000, 597000, 597000, 597000, 597000, 598000, 598000, 598000, 598000, 599000, 599000, 599000, 600000, 601000, 602000, 602000, 603000, 603000, 603000, 603000, 603000, 603000, 604000, 604000, 604000, 604000, 605000, 605000, 605000, 605000, 606000, 606000, 606000, 606000, 607000, 607000, 608000, 608000, 608000, 609000, 609000, 609000, 609000, 610000, 610000, 610000, 610000],
+  "10": [, , 23800, 37500, 49200, 59200, 68700, 77400, 87400, 97600, 109000, 124000, 132000, 139000, 144000, 148000, 150000, 153000, 154000, 156000, 158000, 137000, 138000, 140000, 142000, 144000, 135000, 137000, 138000, 140000, 141000, 143000, 145000, 148000, 151000, 158000, 159000, 162000, 166000, 168000, 170000, 171000, 172000, 173000, 173000, 149000, 150000, 117000, 118000, 119000, 121000, 122000, 117000, 118000, 119000, 120000, 121000, 123000, 124000, 126000, 128000, 129000, 130000, 131000, 132000, 132000, 132000, 132000, 133000, 129000, 129000, 129000, 82400, 83000, 83600, 84100, 84600, 85100, 85700, 86300, 87000, 87700, 88900, 90800, 94200, 96500, 98400, 99800, 100000, 101000, 101000, 102000, 102000, 101000, 102000, 103000, 103000, 104000, 105000, 106000, 107000, 108000, 109000, 110000, 112000, 115000, 124000, 155000, 167000, 175000, 179000, 183000, 185000, 186000, 187000, 188000, 189000, 190000, 191000, 191000, 202000, 203000, 204000, 206000, 207000, 208000, 209000, 211000, 213000, 215000, 217000, 219000, 221000, 225000, 228000, 229000, 230000, 231000, 231000, 231000, 232000, 231000, 231000, 232000, 233000, 233000, 234000, 235000, 235000, 236000, 236000, 237000, 238000, 239000, 240000, 241000, 242000, 249000, 253000, 254000, 254000, 255000, 255000, 256000, 256000, 257000, 259000, 260000, 260000, 261000, 261000, 262000, 262000, 263000, 264000, 267000, 269000, 270000, 271000, 271000, 274000, 275000, 275000, 276000, 276000, 277000, 277000, 277000, 277000, 278000, 278000, 279000, 280000, 281000, 281000, 282000, 282000, 283000, 284000, 284000, 286000, 287000, 287000, 288000, 288000, 289000, 290000, 290000, 290000, 291000, 291000, 291000, 291000, 291000, 292000, 293000, 293000, 294000, 295000, 295000, 296000, 296000, 296000, 297000, 298000, 298000, 299000, 300000, 300000, 301000, 304000, 304000, 305000, 305000, 305000, 306000, 306000, 306000, 307000, 307000, 307000, 308000, 308000, 308000, 308000, 309000, 309000, 309000, 310000, 310000, 312000, 312000, 313000, 314000, 314000, 315000, 315000, 315000, 316000, 316000, 316000, 316000, 317000, 317000, 317000, 318000, 318000, 318000, 319000, 319000, 319000, 320000, 321000, 322000, 323000, 323000, 326000, 326000, 327000, 327000, 328000, 328000, 328000, 328000, 328000, 329000, 329000, 330000, 330000, 330000, 330000, 330000, 331000, 331000, 331000, 332000, 332000, 332000, 333000, 333000, 334000, 335000, 336000, 336000, 336000, 337000, 337000, 337000, 337000, 337000, 338000, 338000, 338000, 339000, 339000, 339000, 339000, 339000, 339000, 340000, 340000, 340000, 342000, 342000, 343000, 343000, 344000, 344000, 344000, 345000, 345000, 345000, 345000, 345000, 345000, 345000, 345000, 346000, 346000, 346000, 346000, 346000, 346000, 346000, 347000, 347000, 347000, 348000, 349000, 349000, 350000, 350000, 350000, 351000, 351000, 351000, 351000, 351000, 351000, 351000, 352000, 352000, 352000, 353000, 353000, 353000, 354000, 354000, 355000, 356000, 356000, 356000, 357000, 358000, 358000, 359000, 359000, 359000, 359000, 360000, 360000, 360000, 360000],
+  "11": [, 2580, 10900, 18400, 24200, 28200, 31500, 34700, 38300, 40800, 44500, 47500, 50100, 52700, 54900, 56600, 58300, 59600, 60500, 61200, 61800, 62700, 63600, 64500, 65800, 67400, 68900, 69800, 70100, 71800, 73000, 74200, 75500, 77000, 79000, 86000, 125000, 136000, 148000, 155000, 158000, 161000, 162000, 163000, 164000, 165000, 167000, 175000, 177000, 179000, 182000, 184000, 187000, 189000, 190000, 192000, 193000, 196000, 197000, 199000, 201000, 203000, 204000, 206000, 207000, 208000, 208000, 209000, 209000, 209000, 209000, 210000, 210000, 211000, 212000, 213000, 214000, 214000, 215000, 216000, 216000, 217000, 218000, 219000, 221000, 223000, 225000, 226000, 227000, 227000, 228000, 228000, 228000, 229000, 229000, 231000, 231000, 232000, 233000, 233000, 234000, 236000, 237000, 238000, 239000, 239000, 240000, 244000, 246000, 247000, 248000, 248000, 249000, 249000, 249000, 249000, 249000, 250000, 250000, 251000, 251000, 252000, 252000, 253000, 253000, 254000, 255000, 255000, 256000, 257000, 257000, 258000, 258000, 259000, 259000, 260000, 260000, 260000, 260000, 260000, 261000, 261000, 261000, 261000, 261000, 262000, 262000, 262000, 263000, 263000, 263000, 264000, 264000, 264000, 265000, 266000, 266000, 267000, 268000, 268000, 268000, 269000, 269000, 269000, 269000, 269000, 269000, 269000, 270000, 270000, 270000, 271000, 270000, 270000, 271000, 271000, 271000, 271000, 272000, 272000, 272000, 273000, 273000, 274000, 275000, 275000, 275000, 275000, 275000, 275000, 276000, 276000, 276000, 276000, 276000, 277000, 277000, 278000, 278000, 278000, 278000, 278000, 279000, 279000, 280000, 280000, 281000, 281000, 281000, 281000, 281000, 281000, 281000, 281000, 282000, 282000, 282000, 282000, 283000, 284000, 286000, 286000, 286000, 286000, 286000, 287000, 287000, 287000, 287000, 287000, 287000, 288000, 288000, 288000, 288000, 288000, 288000, 288000, 288000, 288000, 289000, 289000, 289000, 289000, 290000, 290000, 290000, 290000, 291000, 291000, 291000, 291000, 292000, 292000, 292000, 292000, 292000, 292000, 292000, 292000, 293000, 293000, 293000, 293000, 293000, 293000, 293000, 293000, 294000, 294000, 294000, 294000, 294000, 294000, 294000, 295000, 295000, 295000, 296000, 296000, 296000, 296000, 296000, 296000, 296000, 296000, 296000, 297000, 297000, 297000, 297000, 297000, 297000, 297000, 297000, 298000, 298000, 298000, 298000, 298000, 298000, 299000, 300000, 300000, 300000, 300000, 300000, 300000, 300000, 300000, 300000, 301000, 301000, 301000, 301000, 301000, 301000, 301000, 302000, 302000, 302000, 302000, 302000, 302000, 303000, 303000, 303000, 303000, 303000, 303000, 303000, 303000, 303000, 303000, 303000, 303000, 304000, 304000, 304000, 304000, 304000, 304000, 304000, 304000, 304000, 305000, 305000, 305000, 305000, 305000, 305000, 305000, 305000, 305000, 305000, 306000, 306000, 306000, 306000, 306000, 306000, 306000, 306000, 306000, 306000, 306000, 306000, 307000, 307000, 307000, 307000, 307000, 307000, 307000, 308000, 308000, 308000, 308000, 308000, 308000, 308000, 308000, 308000],
+  "12": [, 2440, 10200, 17100, 22200, 25700, 28500, 31500, 34700, 37000, 40300, 43000, 45400, 47700, 49700, 51300, 52700, 53900, 54600, 55200, 55800, 56500, 57200, 58000, 59000, 60400, 61600, 62300, 62600, 63900, 64800, 65900, 66900, 68000, 69400, 73300, 86000, 91400, 95600, 98400, 100000, 101000, 102000, 102000, 102000, 103000, 104000, 107000, 108000, 109000, 110000, 111000, 112000, 113000, 113000, 114000, 115000, 117000, 120000, 122000, 131000, 134000, 137000, 139000, 140000, 141000, 141000, 142000, 142000, 142000, 142000, 143000, 143000, 144000, 144000, 145000, 146000, 146000, 146000, 147000, 147000, 148000, 148000, 149000, 152000, 153000, 155000, 156000, 157000, 158000, 158000, 158000, 158000, 159000, 160000, 161000, 161000, 161000, 162000, 163000, 164000, 164000, 165000, 166000, 166000, 166000, 167000, 168000, 170000, 171000, 171000, 172000, 172000, 172000, 172000, 172000, 172000, 173000, 173000, 173000, 174000, 174000, 174000, 175000, 175000, 177000, 177000, 178000, 178000, 178000, 179000, 179000, 179000, 180000, 180000, 180000, 181000, 181000, 181000, 181000, 181000, 181000, 181000, 181000, 182000, 182000, 182000, 182000, 182000, 183000, 183000, 183000, 183000, 183000, 184000, 184000, 185000, 185000, 186000, 186000, 186000, 186000, 186000, 187000, 187000, 187000, 187000, 187000, 187000, 187000, 187000, 188000, 187000, 187000, 188000, 188000, 188000, 188000, 188000, 189000, 189000, 190000, 190000, 190000, 190000, 191000, 191000, 191000, 191000, 191000, 191000, 191000, 191000, 191000, 191000, 192000, 192000, 192000, 192000, 192000, 192000, 192000, 193000, 193000, 193000, 193000, 194000, 194000, 194000, 194000, 194000, 194000, 194000, 194000, 194000, 194000, 194000, 195000, 195000, 195000, 195000, 195000, 196000, 196000, 196000, 196000, 196000, 196000, 197000, 197000, 197000, 197000, 197000, 197000, 197000, 197000, 197000, 197000, 197000, 198000, 198000, 198000, 198000, 198000, 198000, 198000, 199000, 199000, 199000, 199000, 199000, 200000, 200000, 200000, 200000, 200000, 200000, 200000, 200000, 200000, 200000, 200000, 201000, 201000, 201000, 201000, 201000, 201000, 201000, 201000, 201000, 201000, 202000, 202000, 202000, 202000, 202000, 202000, 202000, 202000, 202000, 202000, 202000, 202000, 203000, 203000, 203000, 203000, 203000, 203000, 203000, 203000, 203000, 204000, 203000, 203000, 203000, 203000, 204000, 204000, 204000, 204000, 204000, 204000, 204000, 204000, 204000, 204000, 204000, 205000, 205000, 205000, 205000, 205000, 205000, 205000, 205000, 205000, 205000, 205000, 205000, 205000, 206000, 206000, 206000, 206000, 206000, 206000, 206000, 206000, 206000, 206000, 207000, 207000, 207000, 207000, 207000, 207000, 207000, 207000, 207000, 207000, 207000, 207000, 207000, 207000, 207000, 207000, 208000, 208000, 208000, 208000, 208000, 208000, 208000, 208000, 208000, 208000, 208000, 208000, 209000, 209000, 209000, 209000, 209000, 209000, 209000, 209000, 209000, 209000, 209000, 209000, 209000, 210000, 210000, 210000, 210000, 210000, 210000, 210000, 210000, 210000, 210000],
+  "13": [, 2430, 10300, 17300, 22500, 26300, 29300, 32200, 35700, 38100, 41600, 44300, 46800, 49200, 51300, 53000, 54500, 55600, 56400, 57000, 57600, 58300, 59100, 59900, 61000, 62300, 63600, 64400, 64700, 66100, 67000, 68100, 69100, 70200, 71600, 75500, 88300, 93700, 97900, 100000, 102000, 103000, 104000, 104000, 104000, 105000, 106000, 106000, 109000, 110000, 111000, 112000, 113000, 114000, 115000, 116000, 116000, 118000, 119000, 120000, 122000, 123000, 125000, 126000, 126000, 126000, 127000, 127000, 127000, 127000, 127000, 128000, 128000, 129000, 129000, 130000, 130000, 130000, 131000, 131000, 132000, 133000, 134000, 136000, 153000, 160000, 166000, 169000, 171000, 173000, 173000, 174000, 175000, 176000, 177000, 180000, 181000, 182000, 184000, 185000, 187000, 189000, 191000, 193000, 194000, 195000, 197000, 199000, 203000, 205000, 207000, 208000, 209000, 209000, 210000, 210000, 210000, 210000, 211000, 212000, 213000, 214000, 215000, 215000, 216000, 217000, 218000, 219000, 220000, 221000, 222000, 223000, 224000, 224000, 225000, 226000, 226000, 226000, 226000, 227000, 227000, 227000, 227000, 228000, 228000, 228000, 229000, 229000, 230000, 230000, 231000, 231000, 232000, 232000, 233000, 233000, 235000, 236000, 237000, 237000, 237000, 238000, 238000, 238000, 238000, 238000, 239000, 239000, 240000, 241000, 241000, 242000, 240000, 241000, 241000, 242000, 242000, 243000, 243000, 244000, 245000, 245000, 246000, 247000, 247000, 248000, 248000, 248000, 248000, 248000, 248000, 249000, 249000, 249000, 249000, 251000, 252000, 252000, 252000, 252000, 253000, 253000, 254000, 254000, 254000, 257000, 260000, 260000, 260000, 261000, 261000, 261000, 261000, 261000, 262000, 262000, 263600, 263000, 264000, 264000, 265000, 266000, 266000, 267000, 267000, 268000, 268000, 268000, 269000, 269000, 269000, 270000, 270000, 270000, 270000, 271000, 271000, 271000, 271000, 271000, 272000, 273000, 274000, 275000, 275000, 276000, 276000, 277000, 277000, 278000, 278000, 278000, 279000, 280000, 280000, 281000, 281000, 281000, 281000, 281000, 282000, 282000, 282000, 282000, 283000, 283000, 283000, 284000, 284000, 285000, 286000, 286000, 286000, 287000, 287000, 288000, 289000, 290000, 291000, 292000, 292000, 292000, 292000, 293000, 293000, 293000, 293000, 294000, 294000, 294000, 294000, 295000, 295000, 296000, 296000, 296000, 297000, 297000, 298000, 298000, 299000, 300000, 301000, 302000, 302000, 302000, 302000, 302000, 303000, 303000, 303000, 304000, 304000, 305000, 305000, 305000, 305000, 306000, 306000, 306000, 307000, 307000, 307000, 307000, 308000, 309000, 309000, 309000, 309000, 310000, 310000, 310000, 310000, 310000, 310000, 310000, 310000, 311000, 311000, 311000, 312000, 312000, 312000, 313000, 313000, 314000, 314000, 314000, 315000, 315000, 315000, 316000, 316000, 316000, 316000, 316000, 317000, 317000, 317000, 317000, 317000, 317000, 318000, 318000, 318000, 318000, 319000, 319000, 319000, 319000, 320000, 320000, 320000, 321000, 321000, 322000, 322000, 322000, 322000, 322000, 322000, 322000, 322000],
+  "14": [, 11300, 42900, 53800, 61300, 67500, 72900, 78200, 82800, 86400, 90100, 94100, 97800, 101000, 104000, 107000, 109000, 110000, 112000, 113000, 115000, 116000, 117000, 119000, 120000, 122000, 123000, 124000, 122000, 121000, 122000, 123000, 124000, 126000, 127000, 129000, 130000, 132000, 133000, 134000, 135000, 136000, 137000, 137000, 138000, 139000, 140000, 141000, 142000, 143000, 144000, 141000, 141000, 142000, 142000, 143000, 144000, 145000, 146000, 146000, 147000, 148000, 150000, 151000, 151000, 152000, 153000, 153000, 154000, 155000, 155000, 156000, 157000, 158000, 159000, 160000, 160000, 161000, 162000, 163000, 163000, 164000, 165000, 166000, 167000, 167000, 168000, 169000, 170000, 171000, 171000, 172000, 173000, 173000, 174000, 176000, 178000, 184000, 210000, 216000, 220000, 223000, 226000, 228000, 230000, 232000, 234000, 236000, 237000, 239000, 241000, 242000, 243000, 244000, 245000, 245000, 246000, 247000, 247000, 248000, 249000, 250000, 253000, 259000, 263000, 265000, 267000, 269000, 270000, 272000, 273000, 275000, 277000, 279000, 281000, 282000, 283000, 284000, 284000, 285000, 286000, 287000, 288000, 289000, 290000, 294000, 296000, 297000, 297000, 298000, 299000, 299000, 300000, 301000, 301000, 301000, 303000, 304000, 305000, 305000, 306000, 307000, 307000, 308000, 308000, 308000, 309000, 309000, 310000, 313000, 314000, 315000, 315000, 315000, 316000, 316000, 317000, 317000, 318000, 319000, 319000, 320000, 321000, 321000, 322000, 322000, 322000, 322000, 323000, 323000, 324000, 324000, 325000, 326000, 327000, 327000, 327000, 328000, 328000, 328000, 329000, 329000, 329000, 330000, 330000, 331000, 331000, 331000, 332000, 332000, 332000, 332000, 332000, 333000, 333000, 333000, 334000, 335000, 336000, 336000, 336000, 336000, 337000, 337000, 337000, 337000, 337000, 338000, 338000, 338000, 339000, 339000, 339000, 339000, 339000, 339000, 340000, 340000, 340000, 340000, 341000, 341000, 341000, 342000, 342000, 342000, 342000, 342000, 343000, 343000, 343000, 343000, 343000, 344000, 344000, 344000, 344000, 344000, 344000, 345000, 345000, 345000, 345000, 345000, 346000, 346000, 346000, 346000, 347000, 347000, 347000, 347000, 347000, 348000, 348000, 348000, 348000, 348000, 349000, 349000, 349000, 349000, 349000, 349000, 350000, 350000, 350000, 350000, 350000, 351000, 351000, 351000, 351000, 352000, 352000, 352000, 352000, 352000, 352000, 352000, 353000, 353000, 353000, 353000, 353000, 354000, 354000, 354000, 354000, 354000, 354000, 354000, 354000, 355000, 355000, 356000, 356000, 356000, 356000, 356000, 356000, 356000, 356000, 356000, 357000, 357000, 357000, 357000, 357000, 357000, 357000, 357000, 358000, 358000, 358000, 358000, 358000, 359000, 359000, 359000, 359000, 359000, 359000, 359000, 359000, 359000, 360000, 360000, 360000, 360000, 360000, 360000, 360000, 360000, 361000, 361000, 361000, 361000, 361000, 361000, 361000, 361000, 362000, 362000, 362000, 362000, 362000, 362000, 362000, 362000, 362000, 362000, 362000, 363000, 363000, 363000, 363000, 363000, 363000, 363000, 363000, 363000, 363000],
+  "15": [, 10000, 42100, 53100, 60500, 66000, 71200, 76400, 81000, 84900, 88800, 92800, 96300, 99800, 103000, 105000, 107000, 109000, 110000, 111000, 113000, 114000, 115000, 117000, 118000, 119000, 120000, 122000, 120000, 119000, 120000, 121000, 122000, 123000, 124000, 126000, 128000, 129000, 131000, 132000, 133000, 134000, 135000, 135000, 136000, 137000, 137000, 138000, 139000, 140000, 141000, 139000, 139000, 140000, 140000, 141000, 142000, 143000, 143000, 144000, 145000, 146000, 147000, 148000, 149000, 149000, 150000, 150000, 151000, 152000, 152000, 153000, 154000, 155000, 155000, 156000, 157000, 158000, 158000, 159000, 160000, 160000, 161000, 162000, 163000, 164000, 164000, 165000, 166000, 167000, 167000, 168000, 169000, 169000, 170000, 171000, 173000, 177000, 195000, 214000, 219000, 222000, 225000, 227000, 230000, 233000, 234000, 236000, 238000, 240000, 242000, 243000, 244000, 245000, 246000, 247000, 247000, 248000, 249000, 249000, 250000, 252000, 255000, 259000, 262000, 265000, 266000, 268000, 270000, 271000, 273000, 275000, 277000, 279000, 281000, 282000, 283000, 284000, 284000, 285000, 286000, 287000, 290000, 291000, 293000, 294000, 294000, 295000, 296000, 296000, 297000, 298000, 299000, 300000, 301000, 302000, 303000, 304000, 305000, 306000, 307000, 307000, 307000, 308000, 308000, 309000, 310000, 311000, 312000, 313000, 314000, 314000, 314000, 314000, 315000, 315000, 316000, 316000, 317000, 317000, 318000, 318000, 319000, 320000, 320000, 320000, 321000, 321000, 321000, 321000, 322000, 323000, 324000, 324000, 325000, 325000, 325000, 325000, 326000, 326000, 327000, 327000, 327000, 328000, 328000, 328000, 329000, 329000, 329000, 330000, 330000, 330000, 330000, 331000, 332000, 332000, 333000, 333000, 334000, 334000, 334000, 334000, 334000, 335000, 335000, 335000, 335000, 336000, 336000, 336000, 337000, 337000, 337000, 337000, 338000, 338000, 338000, 338000, 338000, 338000, 339000, 340000, 340000, 340000, 340000, 340000, 341000, 341000, 341000, 341000, 341000, 342000, 342000, 342000, 342000, 343000, 343000, 343000, 343000, 343000, 343000, 344000, 345000, 345000, 346000, 346000, 347000, 347000, 348000, 348000, 348000, 349000, 349000, 349000, 349000, 350000, 350000, 350000, 350000, 351000, 351000, 351000, 351000, 351000, 352000, 352000, 352000, 352000, 353000, 353000, 353000, 354000, 354000, 354000, 354000, 354000, 355000, 355000, 355000, 355000, 355000, 356000, 356000, 356000, 356000, 357000, 357000, 357000, 357000, 357000, 357000, 358000, 358000, 358000, 358000, 359000, 359000, 359000, 359000, 359000, 359000, 359000, 359000, 360000, 360000, 360000, 360000, 360000, 360000, 361000, 361000, 361000, 361000, 361000, 361000, 362000, 362000, 362000, 362000, 362000, 362000, 362000, 362000, 363000, 363000, 363000, 363000, 363000, 363000, 363000, 363000, 364000, 364000, 364000, 364000, 364000, 364000, 364000, 364000, 365000, 365000, 365000, 365000, 365000, 366000, 366000, 366000, 366000, 366000, 366000, 366000, 366000, 366000, 366000, 367000, 367000, 367000, 367000, 367000, 367000, 367000, 367000, 367000],
+  "16": [, 10800, 43100, 54200, 61600, 67200, 72600, 77900, 82500, 86500, 90500, 94600, 98200, 101000, 105000, 107000, 109000, 111000, 112000, 114000, 115000, 116000, 118000, 119000, 120000, 122000, 123000, 124000, 122000, 122000, 123000, 124000, 125000, 126000, 127000, 129000, 130000, 132000, 133000, 134000, 135000, 136000, 137000, 137000, 138000, 139000, 140000, 140000, 141000, 142000, 143000, 141000, 141000, 142000, 142000, 143000, 144000, 144000, 145000, 146000, 147000, 148000, 149000, 150000, 151000, 151000, 152000, 152000, 153000, 154000, 155000, 156000, 157000, 158000, 158000, 159000, 160000, 160000, 161000, 162000, 163000, 163000, 164000, 165000, 166000, 166000, 167000, 168000, 169000, 170000, 170000, 170000, 171000, 171000, 172000, 173000, 175000, 178000, 185000, 190000, 192000, 194000, 196000, 197000, 198000, 200000, 201000, 202000, 203000, 204000, 205000, 206000, 207000, 208000, 209000, 209000, 209000, 210000, 210000, 211000, 212000, 215000, 238000, 246000, 251000, 256000, 258000, 262000, 265000, 267000, 270000, 273000, 276000, 279000, 282000, 284000, 285000, 287000, 288000, 289000, 290000, 291000, 293000, 296000, 298000, 300000, 301000, 302000, 303000, 303000, 304000, 305000, 306000, 307000, 308000, 309000, 310000, 312000, 313000, 314000, 315000, 315000, 316000, 316000, 317000, 317000, 318000, 320000, 321000, 322000, 323000, 324000, 324000, 324000, 325000, 325000, 326000, 327000, 327000, 328000, 329000, 330000, 331000, 331000, 332000, 332000, 333000, 333000, 333000, 334000, 334000, 335000, 336000, 336000, 337000, 337000, 338000, 338000, 338000, 339000, 339000, 340000, 340000, 341000, 341000, 342000, 342000, 343000, 343000, 343000, 344000, 344000, 344000, 344000, 345000, 346000, 346000, 347000, 347000, 347000, 348000, 348000, 348000, 349000, 349000, 349000, 349000, 350000, 350000, 351000, 351000, 352000, 352000, 352000, 352000, 353000, 353000, 353000, 353000, 354000, 355000, 355000, 356000, 356000, 356000, 356000, 357000, 357000, 357000, 357000, 358000, 358000, 358000, 358000, 359000, 359000, 359000, 359000, 360000, 360000, 360000, 360000, 361000, 361000, 362000, 362000, 362000, 362000, 363000, 363000, 363000, 363000, 364000, 364000, 364000, 364000, 365000, 365000, 365000, 366000, 366000, 366000, 366000, 366000, 367000, 367000, 367000, 367000, 368000, 369000, 369000, 369000, 369000, 369000, 370000, 370000, 370000, 370000, 371000, 371000, 371000, 371000, 372000, 372000, 372000, 372000, 372000, 372000, 372000, 373000, 373000, 373000, 373000, 373000, 374000, 374000, 374000, 374000, 374000, 374000, 374000, 375000, 375000, 375000, 375000, 375000, 375000, 375000, 376000, 376000, 376000, 376000, 376000, 376000, 376000, 376000, 377000, 377000, 377000, 377000, 377000, 378000, 378000, 378000, 378000, 378000, 378000, 378000, 378000, 379000, 379000, 379000, 379000, 379000, 379000, 379000, 379000, 380000, 380000, 380000, 380000, 380000, 380000, 380000, 381000, 381000, 381000, 381000, 381000, 381000, 381000, 381000, 381000, 382000, 382000, 382000, 382000, 382000, 382000, 382000, 382000, 383000, 383000],
+  "17": [, 10700, 44400, 56100, 64100, 70000, 75600, 81200, 86100, 90400, 96200, 100000, 104000, 108000, 112000, 114000, 116000, 118000, 120000, 121000, 123000, 124000, 126000, 127000, 129000, 130000, 132000, 133000, 131000, 131000, 132000, 133000, 134000, 135000, 136000, 139000, 141000, 143000, 145000, 147000, 148000, 149000, 150000, 151000, 152000, 153000, 154000, 155000, 156000, 157000, 158000, 156000, 156000, 157000, 157000, 158000, 159000, 160000, 161000, 162000, 163000, 164000, 165000, 166000, 167000, 168000, 169000, 169000, 170000, 171000, 172000, 173000, 174000, 175000, 175000, 176000, 177000, 178000, 179000, 180000, 180000, 181000, 182000, 183000, 184000, 185000, 186000, 186000, 187000, 187000, 188000, 189000, 189000, 190000, 191000, 192000, 194000, 197000, 204000, 208000, 211000, 213000, 215000, 216000, 217000, 219000, 220000, 222000, 223000, 224000, 225000, 226000, 227000, 228000, 229000, 229000, 229000, 230000, 230000, 231000, 232000, 234000, 248000, 266000, 272000, 277000, 281000, 285000, 288000, 292000, 296000, 300000, 304000, 308000, 316000, 318000, 320000, 322000, 323000, 324000, 325000, 326000, 328000, 330000, 333000, 334000, 335000, 336000, 337000, 338000, 338000, 339000, 341000, 342000, 343000, 345000, 347000, 348000, 349000, 350000, 351000, 352000, 352000, 353000, 354000, 354000, 355000, 356000, 359000, 360000, 362000, 362000, 362000, 363000, 364000, 364000, 365000, 366000, 367000, 368000, 369000, 371000, 373000, 374000, 374000, 375000, 375000, 376000, 376000, 377000, 377000, 378000, 380000, 381000, 382000, 382000, 383000, 384000, 384000, 385000, 386000, 386000, 387000, 388000, 389000, 389000, 390000, 390000, 391000, 391000, 391000, 392000, 392000, 393000, 393000, 394000, 395000, 396000, 396000, 396000, 397000, 397000, 398000, 398000, 398000, 399000, 399000, 400000, 400000, 401000, 403000, 403000, 404000, 404000, 404000, 405000, 405000, 405000, 406000, 406000, 407000, 408000, 408000, 409000, 409000, 410000, 410000, 410000, 411000, 411000, 411000, 412000, 412000, 413000, 413000, 414000, 414000, 414000, 414000, 415000, 416000, 416000, 417000, 417000, 420000, 422000, 422000, 423000, 423000, 424000, 424000, 425000, 425000, 426000, 427000, 427000, 428000, 428000, 429000, 429000, 430000, 430000, 430000, 431000, 431000, 432000, 432000, 432000, 433000, 433000, 434000, 434000, 435000, 435000, 436000, 436000, 436000, 437000, 437000, 438000, 438000, 439000, 440000, 440000, 441000, 441000, 441000, 441000, 441000, 442000, 442000, 442000, 443000, 443000, 444000, 444000, 444000, 445000, 445000, 445000, 445000, 445000, 446000, 446000, 446000, 447000, 447000, 447000, 448000, 448000, 448000, 448000, 448000, 449000, 449000, 449000, 450000, 450000, 450000, 450000, 450000, 451000, 451000, 451000, 451000, 452000, 452000, 452000, 452000, 453000, 453000, 454000, 454000, 454000, 454000, 454000, 454000, 455000, 455000, 455000, 455000, 456000, 456000, 456000, 456000, 457000, 457000, 457000, 457000, 457000, 458000, 458000, 458000, 458000, 458000, 459000, 459000, 459000, 459000, 459000, 459000, 459000, 460000],
+  "18": [, , , , , 442, 7910, 13700, 18900, 23500, 31500, 35200, 38900, 42100, 44300, 46100, 47400, 48400, 49200, 49900, 50600, 51600, 52400, 53000, 53700, 54300, 55500, 56400, 56900, 57600, 58200, 58800, 59500, 60100, 60900, 61400, 62000, 62400, 62900, 63300, 63700, 63900, 64100, 64200, 64400, 64600, 64800, 53800, 43000, 43300, 43800, 43500, 14700, 15400, 15900, 16400, 16900, 17500, 18100, 18600, 19100, 19500, 20000, 20300, 20600, 20800, 21000, 21200, 21400, 21600, 21800, 22000, 22200, 22400, 23000, 23300, 23600, 23800, 24200, 24600, 25000, 23400, 24700, 25700, 21000, 21900, 22700, 23300, 23700, 24000, 24300, 24600, 24900, 25200, 25400, 25800, 26100, 24600, 25300, 26000, 26500, 27100, 22400, 23100, 23800, 24600, 25500, 27700, 28800, 29800, 30500, 31100, 31500, 31800, 32100, 32400, 32700, 33100, 33700, 34400, 35000, 32900, 33900, 34500, 35100, 35900, 29000, 30000, 32200, 39300, 65200, 73300, 77200, 80200, 83200, 85400, 87300, 88500, 89200, 90000, 90800, 91700, 92900, 94000, 95100, 93700, 94800, 95900, 96800, 97800, 98700, 99600, 100000, 93700, 97700, 102000, 104000, 105000, 106000, 107000, 108000, 108000, 108000, 109000, 109000, 110000, 111000, 111000, 112000, 112000, 106000, 107000, 107000, 108000, 108000, 109000, 110000, 84300, 86400, 88700, 90100, 91600, 92400, 93200, 93600, 93900, 94100, 94400, 94700, 95000, 95300, 95600, 95900, 96300, 93400, 93700, 94100, 94500, 94800, 95300, 95800, 96500, 97500, 99200, 100000, 101000, 101000, 101000, 102000, 102000, 102000, 102000, 103000, 103000, 103000, 104000, 104000, 104000, 104000, 103000, 103000, 103000, 104000, 104000, 105000, 105000, 105000, 106000, 107000, 107000, 107000, 107000, 107000, 107000, 107000, 108000, 108000, 108000, 109000, 109000, 109000, 109000, 109000, 108000, 109000, 109000, 109000, 109000, 110000, 110000, 110000, 111000, 111000, 112000, 112000, 112000, 112000, 112000, 112000, 113000, 113000, 113000, 113000, 113000, 113000, 113000, 113000, 113000, 113000, 113000, 113000, 114000, 114000, 114000, 114000, 115000, 116000, 116000, 116000, 116000, 116000, 117000, 117000, 117000, 117000, 117000, 118000, 118000, 118000, 118000, 119000, 119000, 119000, 119000, 120000, 120000, 120000, 120000, 120000, 121000, 121000, 121000, 121000, 122000, 122000, 122000, 122000, 122000, 122000, 122000, 123000, 123000, 123000, 123000, 123000, 123000, 124000, 124000, 124000, 125000, 125000, 125000, 126000, 127000, 127000, 128000, 128000, 128000, 128000, 128000, 129000, 129000, 129000, 129000, 129000, 129000, 130000, 130000, 130000, 130000, 130000, 130000, 130000, 130000, 131000, 131000, 132000, 132000, 132000, 133000, 133000, 133000, 133000, 133000, 133000, 133000, 134000, 134000, 134000, 134000, 134000, 134000, 134000, 134000, 134000, 134000, 134000, 134000, 134000, 134000, 134000, 135000, 135000, 135000, 136000, 136000, 136000, 136000, 136000, 136000, 136000, 136000, 136000],
+  "19": [, , , , , 486, 7260, 13400, 18500, 22900, 30600, 34200, 37800, 40800, 42800, 44500, 45800, 46600, 47400, 48100, 48800, 49700, 50400, 51000, 51700, 52200, 53300, 54100, 54500, 55100, 55700, 56300, 56900, 57400, 58100, 58700, 59200, 59600, 60000, 60400, 60800, 61100, 61200, 61400, 61500, 61700, 61900, 50800, 40000, 40300, 40900, 41000, 11700, 12300, 12800, 13300, 13800, 14400, 14800, 15400, 15800, 16200, 16600, 16900, 17100, 17300, 17500, 17700, 17900, 18100, 18300, 18500, 18600, 18800, 19400, 19700, 19900, 20200, 20500, 20800, 21100, 19500, 20700, 21800, 16700, 17400, 18100, 18600, 19000, 19200, 19500, 19800, 20100, 20300, 20500, 20800, 21100, 19500, 20200, 20700, 21100, 21700, 16900, 17500, 18200, 18800, 19400, 21300, 22200, 23000, 23500, 24000, 24400, 24600, 24900, 25200, 25400, 25800, 26200, 26700, 27200, 25000, 25700, 26200, 26700, 27300, 20300, 21100, 22900, 27200, 57700, 67400, 72000, 75800, 79700, 82500, 85000, 86600, 87500, 88500, 89600, 90800, 92300, 93800, 95200, 94100, 95700, 97000, 98100, 99300, 100000, 101000, 103000, 96300, 100000, 104000, 106000, 108000, 110000, 111000, 112000, 112000, 112000, 113000, 113000, 114000, 115000, 116000, 116000, 117000, 111000, 111000, 112000, 113000, 113000, 114000, 115000, 89500, 93700, 95700, 97300, 98900, 100000, 101000, 101000, 102000, 102000, 102000, 102000, 103000, 103000, 104000, 104000, 105000, 102000, 103000, 103000, 103000, 104000, 104000, 105000, 106000, 110000, 112000, 113000, 114000, 115000, 115000, 115000, 116000, 116000, 116000, 117000, 117000, 118000, 118000, 119000, 119000, 119000, 118000, 118000, 119000, 119000, 120000, 120000, 121000, 121000, 122000, 123000, 124000, 124000, 125000, 125000, 125000, 125000, 126000, 126000, 126000, 126000, 126000, 127000, 127000, 127000, 126000, 126000, 127000, 127000, 127000, 127000, 128000, 128000, 129000, 130000, 130000, 131000, 131000, 131000, 131000, 131000, 131000, 131000, 132000, 132000, 132000, 132000, 132000, 132000, 132000, 132000, 132000, 133000, 133000, 133000, 133000, 134000, 134000, 135000, 135000, 136000, 136000, 136000, 136000, 136000, 136000, 137000, 137000, 137000, 137000, 137000, 137000, 138000, 138000, 138000, 138000, 138000, 139000, 139000, 139000, 139000, 140000, 140000, 140000, 141000, 141000, 141000, 141000, 141000, 141000, 141000, 141000, 141000, 142000, 142000, 142000, 142000, 142000, 143000, 143000, 143000, 144000, 145000, 146000, 146000, 147000, 147000, 147000, 147000, 148000, 148000, 148000, 148000, 148000, 148000, 148000, 148000, 149000, 149000, 149000, 149000, 149000, 149000, 149000, 150000, 150000, 150000, 150000, 151000, 151000, 152000, 152000, 152000, 153000, 153000, 153000, 153000, 153000, 153000, 153000, 153000, 153000, 153000, 153000, 154000, 154000, 154000, 153000, 154000, 154000, 154000, 154000, 154000, 154000, 155000, 155000, 155000, 155000, 156000, 156000, 156000, 156000, 156000, 156000, 156000],
+  "20": [, , , , , 432, 7790, 13600, 18700, 23200, 30800, 34400, 38000, 41100, 43100, 44800, 46000, 47000, 47700, 48400, 49100, 50000, 50700, 51400, 52000, 52600, 53700, 54500, 55000, 55600, 56200, 56800, 57400, 57900, 58600, 59200, 59700, 60100, 60500, 60900, 61300, 61500, 61700, 61800, 62000, 62100, 62300, 51300, 40500, 40800, 41300, 41700, 12100, 12800, 13300, 13800, 14300, 14800, 15300, 15900, 16300, 16800, 17200, 17500, 17700, 17900, 18100, 18300, 18500, 18600, 18900, 19000, 19200, 19400, 20000, 20300, 20600, 20800, 21100, 21400, 21700, 20200, 21400, 22500, 17500, 18200, 18900, 19400, 19800, 20100, 20300, 20500, 20800, 21100, 21400, 21700, 22000, 20400, 21100, 21700, 22200, 22800, 18000, 18600, 19300, 20000, 20600, 22500, 23400, 24300, 24900, 25500, 25900, 26200, 26500, 26800, 27000, 27400, 27800, 28400, 28800, 26600, 27400, 27900, 28400, 29100, 22100, 22900, 24700, 28900, 42300, 64000, 67700, 70600, 73500, 75500, 77400, 78600, 79400, 80200, 81000, 82000, 83200, 84300, 85500, 84100, 85300, 86400, 87300, 88400, 89400, 90500, 91700, 84700, 88700, 93800, 95600, 96300, 97000, 98000, 99500, 100000, 100000, 100000, 100000, 101000, 102000, 103000, 103000, 104000, 98500, 99300, 100000, 100000, 101000, 102000, 103000, 77400, 79800, 81300, 82700, 84100, 85000, 85900, 86300, 86600, 86900, 87200, 87500, 87800, 88200, 88500, 88900, 89300, 86500, 87000, 87400, 87900, 88300, 88800, 89500, 90200, 91400, 92700, 93900, 95100, 96000, 96600, 97000, 97200, 97400, 97600, 97800, 98000, 98300, 98600, 98900, 99300, 99800, 98500, 98800, 99200, 99600, 100000, 100000, 100000, 101000, 102000, 102000, 103000, 103000, 103000, 103000, 104000, 104000, 104000, 104000, 105000, 105000, 105000, 105000, 105000, 106000, 105000, 105000, 106000, 106000, 106000, 107000, 107000, 108000, 109000, 109000, 110000, 110000, 111000, 111000, 111000, 111000, 111000, 111000, 111000, 112000, 112000, 112000, 111000, 112000, 112000, 112000, 112000, 113000, 113000, 113000, 113000, 114000, 114000, 114000, 115000, 115000, 115000, 115000, 116000, 116000, 116000, 116000, 117000, 117000, 117000, 117000, 117000, 118000, 118000, 118000, 118000, 119000, 119000, 119000, 119000, 119000, 119000, 120000, 120000, 120000, 120000, 120000, 120000, 120000, 120000, 121000, 121000, 121000, 121000, 122000, 122000, 122000, 122000, 122000, 122000, 123000, 123000, 124000, 125000, 125000, 125000, 126000, 126000, 126000, 126000, 126000, 127000, 127000, 127000, 127000, 127000, 127000, 127000, 128000, 128000, 128000, 128000, 128000, 128000, 128000, 128000, 129000, 129000, 130000, 130000, 131000, 131000, 131000, 131000, 132000, 132000, 132000, 132000, 132000, 132000, 132000, 132000, 132000, 132000, 133000, 133000, 133000, 133000, 133000, 133000, 133000, 133000, 133000, 134000, 134000, 134000, 134000, 134000, 135000, 135000, 135000, 135000, 135000, 135000, 135000],
+  "21": [, , , , , 374, 7180, 12800, 17900, 22300, 29700, 33300, 36900, 39800, 41800, 43500, 44700, 45600, 46300, 47000, 47700, 48600, 49300, 49900, 50600, 51100, 52200, 52900, 53400, 54000, 54500, 55100, 55600, 56100, 56900, 57400, 57900, 58300, 58700, 59000, 59400, 59600, 59800, 59900, 60000, 60200, 60400, 49300, 38500, 38800, 39300, 39700, 10200, 10800, 11300, 11800, 12300, 12800, 13300, 13800, 14200, 14600, 15000, 15300, 15500, 15700, 15900, 16100, 16300, 16500, 16700, 16900, 17000, 17200, 17700, 18100, 18300, 18500, 18800, 19100, 19400, 17800, 18900, 20100, 15000, 15700, 16400, 16900, 17200, 17500, 17700, 17900, 18200, 18500, 18700, 19000, 19300, 17700, 18400, 19000, 19400, 19900, 15200, 15800, 16500, 17200, 17800, 19700, 20600, 21400, 22000, 22500, 22900, 23100, 23400, 23700, 23900, 24200, 24700, 25200, 25700, 23500, 24300, 24800, 25300, 25900, 18900, 19600, 21100, 24700, 32700, 38500, 40900, 42800, 44800, 46200, 47500, 48300, 48900, 49400, 49900, 50600, 51400, 52200, 52900, 51100, 52000, 52800, 53400, 54300, 55000, 55900, 57300, 52100, 76200, 86000, 89300, 92200, 95100, 96900, 98100, 99000, 99500, 100000, 100000, 102000, 103000, 104000, 105000, 106000, 100000, 101000, 102000, 103000, 104000, 105000, 106000, 81300, 84300, 86300, 90800, 95400, 100000, 102000, 102000, 103000, 103000, 104000, 104000, 105000, 106000, 107000, 108000, 108000, 106000, 107000, 107000, 108000, 108000, 109000, 111000, 112000, 113000, 115000, 117000, 122000, 124000, 125000, 126000, 126000, 127000, 127000, 128000, 128000, 129000, 130000, 131000, 131000, 132000, 131000, 131000, 132000, 133000, 134000, 135000, 135000, 137000, 139000, 142000, 144000, 144000, 145000, 145000, 146000, 146000, 147000, 147000, 148000, 148000, 149000, 149000, 149000, 150000, 149000, 149000, 150000, 150000, 151000, 151000, 152000, 153000, 154000, 156000, 157000, 158000, 158000, 158000, 158000, 159000, 159000, 159000, 159000, 159000, 160000, 160000, 160000, 161000, 161000, 162000, 162000, 162000, 163000, 163000, 164000, 164000, 165000, 165000, 166000, 167000, 167000, 167000, 167000, 167000, 168000, 168000, 168000, 168000, 169000, 169000, 169000, 170000, 170000, 170000, 170000, 171000, 171000, 171000, 171000, 172000, 173000, 173000, 175000, 176000, 176000, 176000, 177000, 177000, 177000, 177000, 177000, 178000, 178000, 178000, 179000, 179000, 179000, 179000, 180000, 182000, 182000, 183000, 183000, 184000, 184000, 185000, 185000, 186000, 186000, 186000, 186000, 187000, 187000, 187000, 187000, 187000, 187000, 187000, 188000, 188000, 188000, 188000, 188000, 189000, 189000, 189000, 189000, 190000, 190000, 191000, 193000, 193000, 194000, 194000, 194000, 194000, 194000, 194000, 194000, 195000, 195000, 195000, 195000, 195000, 195000, 195000, 195000, 195000, 196000, 196000, 196000, 196000, 197000, 197000, 200000, 200000, 201000, 201000, 201000, 201000, 201000, 201000, 201000, 201000],
+  "22": [, , , , , 719, 7700, 12900, 18000, 22300, 29900, 33500, 37100, 40100, 42100, 43700, 45000, 45800, 46600, 47200, 47800, 48900, 49600, 50200, 50800, 51400, 52400, 53200, 53600, 54200, 54800, 55400, 55900, 56400, 57200, 57700, 58200, 58600, 59000, 59400, 59800, 60000, 60200, 60300, 60400, 60600, 60800, 49800, 39000, 39300, 39800, 40100, 10600, 11200, 11800, 12200, 12700, 13200, 13700, 14200, 14600, 15100, 15500, 15800, 16000, 16200, 16400, 16600, 16700, 16900, 17100, 17300, 17500, 17700, 18200, 18500, 18700, 19000, 19300, 19600, 19900, 18300, 19400, 20500, 15300, 16000, 16600, 17100, 17400, 17700, 17900, 18100, 18400, 18700, 18900, 19200, 19500, 17800, 18500, 19000, 19300, 19800, 15000, 15500, 16200, 16800, 17300, 19000, 19900, 20600, 21100, 21600, 21900, 22200, 22500, 22700, 22900, 23200, 23600, 24100, 24500, 22300, 23000, 23500, 23900, 24500, 17500, 18200, 19700, 23200, 31100, 36700, 39300, 41000, 42800, 44100, 45300, 46200, 46700, 47200, 47700, 48400, 49100, 49900, 50500, 48700, 49500, 50300, 50900, 51600, 52300, 53100, 54300, 47800, 67700, 76900, 80000, 82000, 84000, 86100, 87200, 88000, 88600, 89300, 90000, 90800, 91700, 92500, 93500, 94300, 88400, 89400, 90200, 91000, 92000, 93100, 94600, 69100, 76800, 79000, 81000, 83000, 84300, 85600, 86200, 86500, 86900, 87300, 87800, 88200, 88700, 89200, 89700, 90200, 87500, 88000, 88500, 89000, 89600, 90300, 91100, 92100, 93500, 95900, 101000, 104000, 105000, 106000, 106000, 107000, 107000, 108000, 108000, 108000, 109000, 109000, 110000, 110000, 111000, 110000, 110000, 110000, 111000, 112000, 113000, 113000, 114000, 116000, 117000, 118000, 118000, 119000, 119000, 119000, 120000, 120000, 120000, 120000, 121000, 121000, 121000, 121000, 122000, 121000, 121000, 122000, 122000, 122000, 123000, 124000, 124000, 125000, 126000, 127000, 127000, 127000, 127000, 128000, 128000, 128000, 128000, 128000, 129000, 129000, 129000, 128000, 129000, 129000, 129000, 130000, 130000, 130000, 131000, 131000, 131000, 132000, 132000, 135000, 135000, 136000, 136000, 136000, 137000, 137000, 137000, 137000, 137000, 138000, 138000, 138000, 139000, 139000, 139000, 139000, 140000, 140000, 140000, 140000, 141000, 141000, 142000, 142000, 143000, 143000, 143000, 143000, 143000, 143000, 143000, 144000, 144000, 144000, 144000, 145000, 145000, 145000, 146000, 146000, 147000, 149000, 149000, 150000, 150000, 151000, 151000, 152000, 152000, 152000, 152000, 152000, 152000, 153000, 153000, 153000, 153000, 154000, 154000, 154000, 154000, 154000, 155000, 155000, 155000, 155000, 156000, 156000, 157000, 158000, 159000, 159000, 160000, 160000, 160000, 160000, 160000, 161000, 161000, 161000, 161000, 161000, 161000, 161000, 161000, 161000, 161000, 161000, 162000, 162000, 162000, 162000, 163000, 164000, 164000, 165000, 165000, 165000, 166000, 166000, 166000, 166000, 166000, 166000, 166000],
+  "23": [, 7130, 19900, 27000, 33300, 37400, 40800, 43600, 46200, 48600, 50600, 52400, 54300, 56000, 57200, 59000, 60700, 62800, 63800, 64600, 65600, 66500, 67300, 68000, 65800, 66800, 67600, 68400, 69100, 69700, 70300, 70900, 71500, 72000, 72500, 73200, 73900, 74600, 75300, 76000, 76600, 76800, 77300, 78200, 78800, 79500, 80200, 81100, 82100, 80600, 81500, 82200, 82800, 83300, 83800, 84200, 84700, 85300, 85900, 86500, 87200, 87900, 88800, 89600, 90200, 90800, 91300, 92000, 92600, 93400, 94500, 96000, 98700, 109000, 138000, 147000, 153000, 157000, 161000, 164000, 167000, 170000, 173000, 176000, 179000, 182000, 185000, 187000, 189000, 190000, 191000, 192000, 193000, 194000, 195000, 196000, 197000, 199000, 202000, 207000, 210000, 211000, 210000, 212000, 213000, 214000, 215000, 217000, 218000, 219000, 220000, 221000, 222000, 223000, 226000, 229000, 232000, 233000, 233000, 234000, 235000, 236000, 235000, 235000, 236000, 237000, 237000, 238000, 238000, 239000, 240000, 240000, 241000, 242000, 242000, 243000, 244000, 246000, 247000, 248000, 248000, 249000, 249000, 249000, 250000, 249000, 250000, 250000, 250000, 251000, 251000, 253000, 254000, 255000, 255000, 256000, 256000, 257000, 257000, 258000, 258000, 260000, 262000, 263000, 263000, 263000, 263000, 263000, 264000, 264000, 264000, 264000, 265000, 265000, 265000, 265000, 266000, 266000, 266000, 267000, 267000, 267000, 268000, 268000, 268000, 269000, 269000, 269000, 269000, 269000, 270000, 270000, 270000, 270000, 270000, 271000, 271000, 271000, 271000, 271000, 272000, 272000, 272000, 273000, 273000, 273000, 273000, 274000, 274000, 274000, 274000, 274000, 274000, 275000, 275000, 275000, 275000, 275000, 275000, 276000, 276000, 277000, 278000, 278000, 278000, 278000, 278000, 278000, 279000, 279000, 279000, 279000, 279000, 280000, 280000, 280000, 280000, 280000, 281000, 281000, 281000, 281000, 281000, 281000, 281000, 281000, 281000, 282000, 282000, 282000, 282000, 282000, 283000, 283000, 283000, 283000, 283000, 285000, 285000, 286000, 286000, 286000, 286000, 286000, 286000, 286000, 286000, 287000, 287000, 287000, 287000, 287000, 287000, 287000, 288000, 288000, 288000, 288000, 288000, 289000, 289000, 289000, 289000, 289000, 290000, 290000, 290000, 290000, 290000, 290000, 290000, 290000, 290000, 290000, 291000, 291000, 292000, 292000, 293000, 293000, 293000, 293000, 293000, 294000, 294000, 294000, 294000, 294000, 294000, 294000, 294000, 294000, 294000, 294000, 295000, 295000, 295000, 295000, 295000, 295000, 295000, 295000, 295000, 296000, 296000, 296000, 296000, 296000, 296000, 296000, 296000, 297000, 297000, 297000, 297000, 297000, 297000, 297000, 297000, 297000, 297000, 297000, 297000, 298000, 299000, 300000, 300000, 301000, 301000, 301000, 301000, 301000, 301000, 302000, 302000, 302000, 302000, 302000, 302000, 302000, 302000, 302000, 303000, 303000, 303000, 303000, 303000, 303000, 303000, 303000, 303000, 303000, 303000, 304000, 304000, 304000, 304000, 304000, 304000, 304000, 304000, 304000, 304000],
+  "24": [, 6930, 19800, 26800, 32900, 36900, 40200, 43000, 45600, 47900, 50000, 51700, 53600, 55400, 56500, 58300, 59900, 61900, 62900, 63700, 64600, 65500, 66300, 67000, 64800, 65700, 66400, 67300, 67900, 68600, 69100, 69700, 70300, 70800, 71400, 72000, 72800, 73500, 74100, 74800, 75300, 75500, 76000, 76900, 77500, 78100, 78800, 79600, 80500, 78900, 79700, 80400, 80900, 81400, 81900, 82300, 82800, 83300, 83900, 84400, 85100, 85700, 86600, 87300, 87900, 88400, 89000, 89500, 90200, 90900, 91900, 93300, 95700, 102000, 120000, 133000, 137000, 140000, 142000, 144000, 146000, 148000, 150000, 152000, 153000, 155000, 156000, 158000, 159000, 160000, 160000, 161000, 161000, 162000, 163000, 163000, 164000, 166000, 169000, 172000, 174000, 175000, 174000, 175000, 176000, 176000, 178000, 179000, 180000, 181000, 182000, 183000, 184000, 184000, 185000, 186000, 188000, 190000, 191000, 191000, 192000, 192000, 191000, 192000, 192000, 193000, 193000, 193000, 194000, 194000, 195000, 195000, 196000, 196000, 197000, 197000, 198000, 198000, 199000, 199000, 200000, 201000, 202000, 202000, 203000, 202000, 202000, 202000, 203000, 203000, 203000, 203000, 204000, 204000, 204000, 205000, 205000, 205000, 206000, 206000, 206000, 206000, 207000, 208000, 208000, 209000, 209000, 209000, 209000, 210000, 209000, 210000, 210000, 210000, 210000, 210000, 210000, 211000, 211000, 211000, 212000, 212000, 212000, 212000, 212000, 212000, 213000, 213000, 213000, 213000, 214000, 214000, 214000, 214000, 214000, 214000, 214000, 215000, 215000, 215000, 215000, 215000, 215000, 216000, 216000, 216000, 216000, 216000, 216000, 217000, 217000, 217000, 217000, 217000, 218000, 218000, 218000, 218000, 218000, 218000, 218000, 218000, 219000, 219000, 219000, 219000, 219000, 219000, 219000, 219000, 220000, 220000, 220000, 220000, 221000, 221000, 221000, 221000, 221000, 221000, 221000, 221000, 221000, 221000, 221000, 221000, 222000, 222000, 222000, 222000, 222000, 222000, 222000, 222000, 222000, 222000, 223000, 223000, 223000, 223000, 223000, 223000, 223000, 223000, 223000, 223000, 223000, 223000, 223000, 224000, 224000, 224000, 224000, 224000, 224000, 224000, 224000, 224000, 224000, 224000, 225000, 225000, 225000, 225000, 225000, 225000, 225000, 225000, 225000, 225000, 225000, 225000, 225000, 225000, 225000, 226000, 226000, 226000, 226000, 226000, 226000, 226000, 226000, 226000, 226000, 226000, 227000, 227000, 227000, 227000, 227000, 228000, 228000, 228000, 228000, 228000, 228000, 228000, 228000, 228000, 228000, 228000, 228000, 229000, 229000, 229000, 229000, 229000, 229000, 229000, 229000, 229000, 229000, 229000, 230000, 230000, 230000, 230000, 230000, 230000, 230000, 230000, 230000, 230000, 230000, 230000, 230000, 230000, 231000, 231000, 231000, 231000, 231000, 231000, 231000, 231000, 231000, 231000, 232000, 232000, 232000, 232000, 232000, 232000, 232000, 232000, 232000, 232000, 232000, 232000, 232000, 232000, 232000, 232000, 232000, 232000, 232000, 232000, 232000, 233000, 233000, 233000, 233000],
+  "25": [, 6770, 19800, 26850, 33100, 37100, 40400, 43200, 45900, 48200, 50200, 52000, 53900, 55700, 56800, 58600, 60300, 62400, 63300, 64200, 65100, 66000, 66900, 67600, 65300, 66200, 67000, 67800, 68400, 69000, 69500, 70100, 70700, 71200, 71800, 72400, 73100, 73800, 74500, 75200, 75800, 76000, 76600, 77600, 78200, 78800, 79500, 80400, 81300, 79700, 80500, 81000, 81600, 82100, 82500, 82900, 83400, 83800, 84400, 84900, 85600, 86200, 87000, 87700, 88200, 88800, 89200, 89800, 90400, 91000, 92000, 93300, 95200, 101000, 107000, 112000, 115000, 117000, 118000, 120000, 121000, 122000, 123000, 125000, 126000, 127000, 128000, 129000, 130000, 131000, 132000, 132000, 133000, 133000, 134000, 135000, 137000, 142000, 158000, 164000, 167000, 169000, 169000, 171000, 173000, 175000, 177000, 179000, 181000, 182000, 184000, 185000, 186000, 187000, 188000, 191000, 193000, 195000, 195000, 196000, 197000, 197000, 196000, 197000, 197000, 198000, 198000, 199000, 199000, 200000, 201000, 201000, 202000, 202000, 203000, 204000, 204000, 205000, 207000, 208000, 209000, 210000, 210000, 210000, 211000, 210000, 211000, 211000, 211000, 212000, 212000, 212000, 213000, 213000, 213000, 214000, 214000, 215000, 215000, 216000, 216000, 216000, 217000, 217000, 217000, 218000, 218000, 218000, 219000, 219000, 218000, 219000, 219000, 219000, 219000, 219000, 220000, 220000, 220000, 221000, 221000, 221000, 221000, 222000, 222000, 222000, 223000, 223000, 223000, 224000, 224000, 224000, 224000, 225000, 225000, 225000, 225000, 225000, 225000, 225000, 226000, 226000, 226000, 226000, 227000, 227000, 227000, 227000, 227000, 228000, 228000, 229000, 229000, 230000, 230000, 230000, 230000, 230000, 230000, 230000, 231000, 231000, 231000, 231000, 231000, 231000, 232000, 232000, 232000, 232000, 232000, 232000, 233000, 233000, 233000, 234000, 234000, 234000, 234000, 234000, 234000, 234000, 234000, 234000, 234000, 234000, 234000, 234000, 235000, 235000, 235000, 235000, 235000, 235000, 235000, 236000, 236000, 236000, 236000, 237000, 237000, 237000, 237000, 237000, 237000, 237000, 237000, 237000, 238000, 238000, 238000, 238000, 238000, 238000, 238000, 238000, 238000, 239000, 239000, 239000, 239000, 239000, 239000, 240000, 240000, 240000, 240000, 240000, 240000, 240000, 240000, 240000, 240000, 240000, 241000, 241000, 241000, 241000, 241000, 241000, 241000, 241000, 241000, 242000, 242000, 242000, 242000, 242000, 243000, 243000, 243000, 243000, 243000, 243000, 243000, 243000, 243000, 243000, 243000, 243000, 243000, 243000, 244000, 244000, 244000, 244000, 244000, 244000, 244000, 244000, 244000, 244000, 244000, 245000, 245000, 245000, 245000, 245000, 245000, 245000, 245000, 245000, 245000, 245000, 245000, 245000, 246000, 246000, 246000, 247000, 247000, 247000, 247000, 247000, 247000, 247000, 248000, 248000, 248000, 248000, 248000, 248000, 248000, 248000, 248000, 248000, 248000, 248000, 248000, 248000, 248000, 248000, 249000, 249000, 249000, 249000, 249000, 249000, 249000, 249000, 249000, 249000, 249000],
+  "26": [, 6550, 19600, 26650, 32800, 36900, 40200, 43100, 45800, 48100, 50200, 52000, 53900, 55800, 56900, 58800, 60400, 62500, 63500, 64400, 65300, 66200, 67100, 67800, 65600, 66500, 67300, 68100, 68700, 69400, 69900, 70500, 71100, 71600, 72200, 72900, 73600, 74300, 75000, 75700, 76300, 76500, 77100, 78000, 78600, 79200, 79900, 80800, 81700, 80000, 80800, 81400, 81900, 82400, 82800, 83200, 83700, 84200, 84700, 85300, 85900, 86500, 87300, 88000, 88500, 89100, 89600, 90100, 90700, 91400, 92400, 93600, 95500, 101000, 107000, 112000, 115000, 117000, 118000, 120000, 120000, 122000, 123000, 125000, 126000, 127000, 128000, 129000, 130000, 131000, 132000, 132000, 133000, 133000, 134000, 135000, 136000, 139000, 149000, 158000, 161000, 164000, 163000, 165000, 167000, 169000, 174000, 177000, 181000, 182000, 184000, 185000, 186000, 187000, 189000, 190000, 191000, 192000, 193000, 193000, 194000, 195000, 194000, 194000, 195000, 195000, 196000, 196000, 197000, 197000, 200000, 202000, 203000, 203000, 204000, 205000, 205000, 206000, 207000, 207000, 208000, 208000, 209000, 209000, 210000, 209000, 209000, 210000, 210000, 210000, 211000, 211000, 211000, 212000, 213000, 214000, 215000, 216000, 217000, 217000, 218000, 218000, 219000, 219000, 219000, 220000, 220000, 220000, 220000, 221000, 221000, 221000, 221000, 221000, 221000, 222000, 222000, 222000, 223000, 224000, 225000, 225000, 226000, 226000, 226000, 226000, 227000, 227000, 227000, 227000, 227000, 228000, 228000, 228000, 228000, 228000, 229000, 229000, 229000, 229000, 229000, 230000, 231000, 231000, 232000, 232000, 232000, 232000, 233000, 233000, 233000, 233000, 233000, 234000, 234000, 234000, 234000, 234000, 234000, 234000, 235000, 235000, 235000, 235000, 235000, 236000, 236000, 237000, 238000, 238000, 239000, 239000, 239000, 240000, 240000, 240000, 240000, 240000, 240000, 240000, 241000, 241000, 241000, 241000, 241000, 241000, 241000, 241000, 241000, 242000, 242000, 243000, 243000, 243000, 243000, 243000, 244000, 244000, 244000, 244000, 244000, 244000, 244000, 244000, 245000, 245000, 245000, 245000, 245000, 245000, 245000, 245000, 245000, 246000, 247000, 247000, 248000, 248000, 248000, 249000, 249000, 249000, 249000, 249000, 249000, 249000, 249000, 249000, 249000, 250000, 250000, 250000, 250000, 250000, 250000, 250000, 251000, 251000, 251000, 252000, 252000, 252000, 252000, 253000, 253000, 253000, 253000, 253000, 253000, 253000, 253000, 253000, 254000, 254000, 254000, 254000, 254000, 254000, 254000, 254000, 254000, 254000, 255000, 256000, 256000, 256000, 256000, 256000, 256000, 257000, 257000, 257000, 257000, 257000, 257000, 257000, 257000, 257000, 257000, 257000, 258000, 258000, 258000, 258000, 258000, 258000, 259000, 259000, 259000, 260000, 260000, 260000, 260000, 260000, 260000, 260000, 260000, 260000, 260000, 261000, 261000, 261000, 261000, 261000, 261000, 261000, 261000, 261000, 261000, 261000, 262000, 262000, 262000, 263000, 263000, 263000, 263000, 263000, 263000, 263000, 263000, 263000, 263000],
+  "27": [, 939, 12400, 18600, 22600, 25800, 28900, 32500, 35900, 39300, 42000, 45500, 47700, 49800, 51500, 52800, 53900, 54700, 55200, 55700, 56400, 57400, 58300, 59100, 59900, 60600, 61400, 62100, 62700, 64000, 66000, 52600, 54600, 59400, 63000, 65600, 68000, 58500, 60100, 61200, 62000, 62600, 63100, 63500, 64000, 64600, 65400, 66400, 67300, 68200, 69300, 70300, 70800, 59200, 60300, 62300, 66100, 62900, 99900, 107000, 117000, 122000, 126000, 128000, 130000, 132000, 133000, 134000, 135000, 136000, 138000, 139000, 141000, 142000, 144000, 145000, 147000, 140000, 141000, 142000, 122000, 124000, 126000, 127000, 128000, 129000, 132000, 133000, 134000, 134000, 134000, 135000, 135000, 135000, 136000, 136000, 137000, 137000, 137000, 138000, 138000, 139000, 120000, 121000, 122000, 123000, 126000, 76300, 77300, 78200, 78900, 79400, 79800, 80100, 80300, 80500, 80700, 81000, 81300, 81600, 81900, 82100, 82400, 82700, 82900, 83100, 83400, 81800, 81800, 82400, 83100, 83900, 85400, 86400, 87000, 87400, 87700, 87800, 88000, 88100, 88400, 88700, 88900, 89200, 89400, 89700, 89900, 90200, 90400, 90800, 90500, 90200, 90700, 91200, 91700, 92100, 93000, 93600, 93900, 94200, 94400, 94500, 94600, 94700, 94800, 95000, 95100, 95200, 95400, 95500, 95600, 95800, 94400, 94600, 94700, 94800, 95000, 95200, 95300, 95500, 96300, 96800, 97000, 97200, 97200, 97300, 97400, 97400, 97400, 97500, 97600, 97600, 97700, 97800, 97900, 97900, 98000, 98100, 97200, 97300, 97400, 97500, 97600, 97800, 98100, 98300, 98400, 98500, 98600, 98600, 98700, 98700, 98700, 98800, 98800, 98900, 98900, 99000, 99100, 99200, 99300, 99300, 99400, 99500, 99600, 99800, 99700, 99800, 99900, 100000, 100000, 100000, 100000, 100000, 100000, 100000, 100000, 100000, 100000, 100000, 100000, 100000, 100000, 100000, 101000, 101000, 101000, 101000, 101000, 101000, 101000, 101000, 101000, 101000, 102000, 102000, 102000, 102000, 102000, 102000, 102000, 102000, 102000, 102000, 102000, 102000, 102000, 102000, 102000, 102000, 102000, 102000, 102000, 102000, 102000, 102000, 102000, 103000, 103000, 103000, 103000, 103000, 103000, 103000, 103000, 103000, 103000, 103000, 103000, 103000, 103000, 103000, 103000, 103000, 103000, 103000, 103000, 103000, 103000, 104000, 104000, 104000, 104000, 104000, 104000, 104000, 104000, 104000, 104000, 104000, 104000, 104000, 104000, 104000, 104000, 105000, 105000, 105000, 105000, 105000, 105000, 105000, 105000, 105000, 105000, 105000, 105000, 105000, 105000, 105000, 105000, 105000, 105000, 105000, 105000, 105000, 105000, 105000, 105000, 105000, 106000, 106000, 106000, 106000, 105000, 106000, 106000, 106000, 106000, 106000, 106000, 106000, 106000, 106000, 106000, 106000, 106000, 106000, 106000, 106000, 106000, 106000, 106000, 106000, 106000, 106000, 107000, 107000, 107000, 107000, 107000, 107000, 107000, 107000, 107000, 107000, 107000, 107000, 107000, 107000, 107000, 107000, 107000],
+  "28": [, 826, 12400, 18700, 22800, 26200, 29400, 33000, 36600, 40200, 43400, 47800, 50300, 52700, 54600, 56200, 57400, 58300, 58900, 59500, 60200, 61300, 62300, 63300, 64100, 65000, 65900, 66700, 67400, 69200, 72800, 60200, 62900, 68400, 73100, 76400, 79500, 70300, 72200, 73600, 74500, 75200, 75800, 76300, 76800, 77500, 78400, 79500, 80500, 81500, 82700, 83800, 84500, 72900, 74200, 76200, 79700, 70200, 111000, 124000, 139000, 151000, 159000, 164000, 168000, 171000, 173000, 175000, 177000, 180000, 184000, 188000, 192000, 195000, 199000, 202000, 205000, 200000, 202000, 205000, 187000, 190000, 193000, 196000, 199000, 201000, 203000, 204000, 205000, 205000, 206000, 206000, 207000, 208000, 209000, 209000, 210000, 211000, 212000, 213000, 213000, 214000, 196000, 197000, 199000, 202000, 204000, 155000, 158000, 160000, 161000, 162000, 163000, 163000, 163000, 164000, 164000, 165000, 165000, 166000, 166000, 167000, 168000, 168000, 169000, 169000, 170000, 169000, 169000, 171000, 172000, 174000, 177000, 182000, 183000, 184000, 185000, 185000, 185000, 186000, 186000, 187000, 187000, 188000, 188000, 189000, 189000, 190000, 190000, 191000, 191000, 193000, 194000, 195000, 197000, 198000, 199000, 200000, 200000, 201000, 201000, 202000, 202000, 202000, 202000, 202000, 203000, 203000, 203000, 204000, 204000, 204000, 203000, 203000, 204000, 204000, 205000, 206000, 206000, 207000, 208000, 208000, 209000, 209000, 209000, 209000, 209000, 210000, 210000, 210000, 210000, 210000, 210000, 211000, 211000, 211000, 211000, 211000, 211000, 211000, 212000, 212000, 212000, 213000, 213000, 214000, 214000, 214000, 214000, 215000, 215000, 215000, 215000, 215000, 215000, 215000, 216000, 216000, 216000, 217000, 217000, 217000, 217000, 218000, 218000, 218000, 219000, 219000, 219000, 220000, 221000, 221000, 221000, 222000, 222000, 222000, 222000, 222000, 222000, 222000, 223000, 223000, 223000, 223000, 224000, 224000, 224000, 225000, 225000, 225000, 226000, 226000, 227000, 227000, 227000, 227000, 227000, 228000, 228000, 228000, 228000, 228000, 228000, 228000, 228000, 228000, 228000, 229000, 229000, 229000, 229000, 229000, 229000, 230000, 230000, 231000, 231000, 232000, 232000, 232000, 232000, 232000, 232000, 232000, 232000, 233000, 233000, 233000, 233000, 233000, 233000, 233000, 234000, 234000, 234000, 234000, 235000, 235000, 236000, 236000, 237000, 238000, 239000, 239000, 239000, 239000, 239000, 240000, 240000, 240000, 240000, 240000, 240000, 240000, 240000, 240000, 241000, 241000, 241000, 242000, 242000, 242000, 243000, 243000, 244000, 244000, 244000, 244000, 245000, 245000, 245000, 245000, 245000, 245000, 245000, 245000, 246000, 246000, 246000, 246000, 246000, 246000, 246000, 247000, 247000, 247000, 247000, 248000, 248000, 248000, 249000, 249000, 249000, 249000, 249000, 249000, 249000, 249000, 249000, 249000, 249000, 250000, 250000, 250000, 250000, 250000, 250000, 250000, 251000, 251000, 251000, 251000, 252000, 252000, 252000, 252000, 253000, 253000, 253000, 253000, 253000, 253000, 253000],
+  "29": [, 798, 12300, 18500, 22600, 25900, 29000, 32500, 36000, 39300, 42200, 45800, 48000, 50200, 52000, 53300, 54400, 55200, 55700, 56300, 56900, 58000, 58900, 59800, 60600, 61300, 62100, 62800, 63500, 64900, 67100, 53900, 56000, 60700, 64600, 67400, 70100, 60600, 62300, 63500, 64300, 64900, 65400, 65900, 66400, 67000, 67800, 68800, 69800, 70700, 71900, 73000, 73500, 61800, 63000, 64900, 68100, 57800, 75900, 95500, 105000, 111000, 114000, 117000, 119000, 120000, 122000, 123000, 124000, 125000, 126000, 128000, 130000, 131000, 133000, 134000, 135000, 128000, 129000, 131000, 111000, 112000, 114000, 115000, 116000, 117000, 118000, 119000, 119000, 120000, 120000, 120000, 121000, 121000, 121000, 122000, 122000, 123000, 123000, 124000, 124000, 124000, 106000, 107000, 108000, 109000, 112000, 61900, 62800, 63800, 64500, 65100, 65500, 65800, 66000, 66300, 66500, 66800, 67200, 67500, 67800, 68100, 68400, 68700, 68900, 69100, 69500, 68000, 68000, 68700, 69400, 71300, 72500, 73400, 74200, 74600, 75000, 75100, 75300, 75500, 75700, 76000, 76300, 76500, 76800, 77100, 77400, 77700, 77900, 78400, 78200, 77900, 78500, 79200, 80100, 80900, 81500, 82100, 82600, 83000, 83300, 83500, 83700, 83800, 84000, 84200, 84400, 84600, 84900, 85100, 85300, 85500, 84200, 84400, 84600, 84800, 85100, 85400, 85700, 86000, 86300, 86500, 86800, 86900, 87000, 87100, 87200, 87300, 87300, 87400, 87500, 87600, 87700, 87800, 87900, 88000, 88200, 88300, 87400, 87500, 87700, 87800, 88000, 88200, 88900, 89400, 89500, 89600, 89700, 89800, 89800, 89900, 89900, 90000, 90000, 90100, 90200, 90300, 90400, 90600, 90700, 90800, 90900, 91000, 91200, 91300, 91200, 91600, 92100, 92200, 92400, 92600, 92700, 92700, 92800, 92900, 92900, 93000, 93100, 93200, 93400, 93500, 93700, 93800, 93900, 94100, 94200, 94300, 94300, 94400, 94900, 95200, 95400, 95600, 95700, 95800, 95900, 95900, 96000, 96000, 96100, 96100, 96200, 96300, 96400, 96400, 96500, 96600, 96400, 96500, 96600, 96700, 96800, 97000, 97200, 97700, 98100, 98300, 98400, 98500, 98600, 98700, 98700, 98800, 98800, 98900, 99000, 99000, 99100, 99200, 99300, 99400, 99500, 99600, 99700, 99700, 99800, 100000, 100000, 100000, 100000, 101000, 101000, 101000, 101000, 101000, 101000, 101000, 101000, 101000, 101000, 101000, 101000, 102000, 102000, 102000, 102000, 102000, 102000, 102000, 102000, 102000, 102000, 102000, 103000, 103000, 103000, 103000, 103000, 103000, 103000, 103000, 103000, 103000, 103000, 103000, 103000, 103000, 104000, 104000, 104000, 104000, 104000, 104000, 104000, 104000, 104000, 104000, 105000, 105000, 105000, 105000, 105000, 105000, 105000, 105000, 105000, 106000, 106000, 106000, 106000, 106000, 106000, 106000, 106000, 106000, 106000, 106000, 106000, 106000, 106000, 107000, 107000, 107000, 107000, 107000, 107000, 108000, 108000, 108000, 108000, 108000, 108000],
+  "30": [, 794, 12400, 18800, 22900, 26300, 29500, 33000, 36500, 40000, 42900, 46600, 49000, 51300, 53100, 54500, 55600, 56400, 57000, 57600, 58300, 59400, 60300, 61200, 62100, 62900, 63800, 64500, 65200, 66700, 69000, 55900, 58200, 62900, 66600, 69400, 71900, 62500, 64100, 65300, 66100, 66700, 67200, 67700, 68200, 68800, 69600, 70600, 71500, 72500, 73600, 74600, 75300, 63500, 64800, 66700, 69900, 59800, 70700, 108000, 122000, 129000, 134000, 138000, 140000, 142000, 144000, 145000, 147000, 149000, 151000, 153000, 156000, 158000, 160000, 162000, 164000, 157000, 159000, 161000, 141000, 143000, 145000, 147000, 148000, 150000, 151000, 152000, 153000, 153000, 153000, 154000, 154000, 155000, 155000, 156000, 156000, 157000, 157000, 158000, 158000, 159000, 140000, 141000, 142000, 146000, 148000, 97300, 98500, 99500, 100000, 101000, 101000, 101000, 102000, 102000, 102000, 103000, 103000, 103000, 104000, 104000, 104000, 105000, 105000, 105000, 106000, 105000, 105000, 107000, 109000, 110000, 111000, 112000, 113000, 113000, 114000, 114000, 114000, 114000, 114000, 115000, 115000, 115000, 116000, 116000, 117000, 117000, 117000, 118000, 118000, 117000, 118000, 120000, 121000, 122000, 122000, 123000, 124000, 124000, 124000, 124000, 124000, 125000, 125000, 125000, 125000, 125000, 126000, 126000, 126000, 126000, 125000, 125000, 125000, 126000, 126000, 126000, 127000, 127000, 127000, 128000, 128000, 128000, 128000, 128000, 128000, 128000, 128000, 129000, 129000, 129000, 129000, 129000, 129000, 129000, 129000, 130000, 129000, 129000, 129000, 129000, 129000, 130000, 131000, 131000, 131000, 131000, 131000, 131000, 131000, 131000, 132000, 132000, 132000, 132000, 132000, 132000, 132000, 132000, 132000, 133000, 133000, 133000, 133000, 133000, 133000, 134000, 134000, 134000, 134000, 135000, 135000, 135000, 135000, 135000, 135000, 135000, 135000, 135000, 135000, 135000, 135000, 136000, 136000, 136000, 136000, 136000, 136000, 136000, 137000, 137000, 137000, 137000, 137000, 137000, 137000, 138000, 138000, 138000, 138000, 138000, 138000, 138000, 138000, 138000, 138000, 138000, 138000, 138000, 138000, 138000, 138000, 139000, 139000, 139000, 140000, 140000, 140000, 140000, 140000, 140000, 140000, 140000, 140000, 140000, 140000, 140000, 140000, 141000, 141000, 141000, 141000, 141000, 141000, 141000, 141000, 142000, 142000, 142000, 143000, 143000, 143000, 143000, 143000, 143000, 144000, 144000, 144000, 144000, 144000, 144000, 144000, 144000, 144000, 144000, 145000, 145000, 145000, 145000, 145000, 145000, 146000, 146000, 146000, 146000, 146000, 146000, 147000, 147000, 147000, 147000, 147000, 147000, 147000, 147000, 147000, 147000, 147000, 147000, 147000, 148000, 148000, 148000, 148000, 148000, 148000, 148000, 149000, 149000, 149000, 149000, 149000, 149000, 149000, 149000, 149000, 149000, 150000, 150000, 150000, 150000, 150000, 150000, 150000, 150000, 150000, 150000, 150000, 150000, 150000, 151000, 151000, 151000, 151000, 152000, 152000, 152000, 152000, 152000, 152000, 152000, 152000],
+  "31": [, 766, 12000, 18100, 22100, 25300, 28300, 31700, 35000, 38200, 41000, 44500, 46600, 48800, 50400, 51800, 52800, 53600, 54100, 54700, 55300, 56300, 57200, 58000, 58800, 59500, 60300, 60900, 61600, 62800, 65000, 51600, 53700, 58200, 61600, 64200, 66600, 57000, 58600, 59800, 60600, 61200, 61600, 62100, 62600, 63200, 63900, 64800, 65700, 66600, 67700, 68700, 69200, 57500, 58600, 60400, 63500, 53100, 63100, 78800, 108000, 115000, 119000, 123000, 125000, 127000, 129000, 130000, 131000, 133000, 135000, 137000, 139000, 141000, 143000, 145000, 146000, 140000, 141000, 143000, 123000, 126000, 128000, 129000, 131000, 132000, 134000, 135000, 135000, 136000, 136000, 136000, 137000, 137000, 138000, 138000, 139000, 139000, 140000, 140000, 141000, 141000, 123000, 123000, 127000, 130000, 131000, 80500, 81700, 82600, 83500, 84200, 84700, 85100, 85300, 85600, 85800, 86200, 86600, 87000, 87300, 87700, 88000, 88400, 88700, 89000, 89400, 88800, 88800, 90000, 90800, 91700, 92700, 93700, 94300, 94700, 95000, 95200, 95400, 95500, 95700, 96000, 96300, 96600, 96800, 97100, 97500, 97700, 98000, 98400, 98200, 97900, 98900, 99600, 100000, 100000, 101000, 102000, 102000, 102000, 103000, 103000, 103000, 103000, 103000, 104000, 104000, 104000, 104000, 104000, 104000, 105000, 103000, 104000, 104000, 104000, 104000, 105000, 105000, 105000, 106000, 106000, 106000, 106000, 107000, 107000, 107000, 107000, 107000, 107000, 107000, 107000, 107000, 107000, 108000, 108000, 108000, 108000, 107000, 107000, 107000, 108000, 108000, 108000, 109000, 109000, 109000, 109000, 109000, 109000, 109000, 110000, 110000, 110000, 110000, 110000, 110000, 110000, 110000, 110000, 110000, 111000, 111000, 111000, 111000, 111000, 112000, 112000, 112000, 112000, 113000, 113000, 113000, 113000, 113000, 113000, 113000, 113000, 113000, 113000, 114000, 114000, 114000, 114000, 114000, 114000, 115000, 115000, 115000, 115000, 115000, 116000, 116000, 116000, 116000, 116000, 117000, 117000, 117000, 117000, 117000, 117000, 117000, 117000, 117000, 117000, 117000, 117000, 117000, 117000, 117000, 117000, 117000, 118000, 118000, 118000, 118000, 119000, 119000, 119000, 119000, 119000, 119000, 119000, 119000, 119000, 119000, 119000, 119000, 119000, 119000, 119000, 119000, 119000, 119000, 119000, 120000, 120000, 120000, 120000, 121000, 121000, 121000, 121000, 121000, 121000, 121000, 121000, 121000, 121000, 122000, 122000, 122000, 122000, 122000, 122000, 122000, 122000, 122000, 122000, 122000, 122000, 122000, 123000, 123000, 123000, 123000, 123000, 123000, 123000, 123000, 123000, 123000, 124000, 124000, 124000, 124000, 124000, 124000, 124000, 124000, 124000, 124000, 124000, 124000, 124000, 124000, 125000, 125000, 125000, 126000, 126000, 126000, 126000, 126000, 127000, 127000, 127000, 127000, 127000, 127000, 127000, 127000, 127000, 127000, 127000, 127000, 128000, 128000, 128000, 128000, 128000, 128000, 128000, 129000, 129000, 129000, 129000, 129000, 129000, 129000, 129000, 129000]
+};
+
+// ==========================================
+        // ⚠ 您的 MOCK_DATA_STAGES 數據放在這裡
+        // ==========================================
+        // const MOCK_DATA_STAGES = { ... };
+
+        // ★ 輔助線設定 (像素偏移)
+        const AUX_LINES_CONFIG = {
+            "17": { pixelOffset: 2, colorUp: "#2d87f7", colorDown: "#ff82c9" }
+        };
+
+        // ==========================================
+        // 2. 修正 Y 軸上限計算邏輯 (以 10 萬為單位進位)
+        // ==========================================
+        let globalYMax = 0; 
+        Object.values(MOCK_DATA_STAGES).forEach(arr => { 
+            arr.forEach(val => { 
+                if (val !== null && val > globalYMax) globalYMax = val; 
+            }); 
+        });
+
+        // ✨ 邏輯：除以 100,000 取無條件進位 (Math.ceil)，再乘回 100,000
+        // 例如：540,000 / 100,000 = 5.4 -> 進位為 6 -> 變 600,000
+        // 例如：440,000 / 100,000 = 4.4 -> 進位為 5 -> 變 500,000
+        globalYMax = Math.ceil(globalYMax / 100000) * 100000;
+        
+        // 如果數據為 0 或空，給一個預設值
+        if (globalYMax === 0) globalYMax = 100000;
+        
+        const globalYMin = 0;
+
+        // ==========================================
+        // 2. 數據填充邏輯
+        // ==========================================
+        const avatarImages = {}; 
+        const processedStatsData = {};
+
+        CHANNEL_REGISTRY.forEach(ch => {
+            const img = new Image(); img.src = ch.img; avatarImages[ch.id] = img;
+            const rawData = MOCK_DATA_STAGES[ch.id] || [];
+            const paddedData = new Array(totalHours).fill(null); 
+            
+            let dataPointer = 0;
+            for (let d = timeRange.start[0]; d <= timeRange.end[0]; d++) {
+                let hStart = (d === timeRange.start[0]) ? timeRange.start[1] : 0;
+                let hEnd = (d === timeRange.end[0]) ? timeRange.end[1] : 23;
+                
+                for (let h = hStart; h <= hEnd; h++) {
+                    const targetIdx = timeToIndex[`${d}_${h}`];
+                    if (targetIdx !== undefined && rawData[dataPointer] !== undefined) {
+                        paddedData[targetIdx] = rawData[dataPointer];
+                    }
+                    dataPointer++;
+                }
+            }
+            processedStatsData[ch.id] = paddedData;
+        });
+
+        // ✨ 外掛：滑鼠懸停時的垂直十字線
+        const verticalHoverLinePlugin = {
+            id: 'verticalHoverLine',
+            beforeDraw: chart => {
+                if (chart.tooltip._active && chart.tooltip._active.length) {
+                    const ctx = chart.ctx;
+                    const activePoint = chart.tooltip._active[0];
+                    const x = activePoint.element.x;
+                    const topY = chart.scales.y.top;
+                    const bottomY = chart.scales.y.bottom;
+
+                    ctx.save();
+                    ctx.beginPath();
+                    ctx.moveTo(x, topY);
+                    ctx.lineTo(x, bottomY);
+                    ctx.lineWidth = 1.5;
+                    ctx.strokeStyle = 'rgba(0, 0, 0, 0.15)';
+                    ctx.setLineDash([5, 5]); 
+                    ctx.stroke();
+                    ctx.restore();
+                }
+            }
+        };
+
+        // ★ 自訂插件：繪製等距像素輔助線
+        const auxLinesPlugin = {
+            id: 'auxLines',
+            beforeDatasetsDraw(chart) {
+                const { ctx, chartArea } = chart;
+                const hasFocus = chart._focusedIds && chart._focusedIds.size > 0;
+                const activeElements = chart.getActiveElements(); 
+
+                chart.data.datasets.forEach((dataset, i) => {
+                    const conf = AUX_LINES_CONFIG[dataset.id];
+                    const meta = chart.getDatasetMeta(i);
+                    if (!conf || meta.hidden) return;
+
+                    const isSelected = !hasFocus || chart._focusedIds.has(dataset.id);
+                    const alpha = isSelected ? 1 : 0.1;
+
+                    const upColor = (colorMode === 'personal') ? hexToRgba(conf.colorUp, alpha) : hexToRgba(dataset.originalColor, alpha);
+                    const downColor = (colorMode === 'personal') ? hexToRgba(conf.colorDown, alpha) : hexToRgba(dataset.originalColor, alpha);
+
+                    ctx.save(); 
+                    ctx.beginPath(); 
+                    ctx.rect(chartArea.left, chartArea.top, chartArea.width, chartArea.height);
+                    ctx.clip(); 
+
+                    const activeElsForDataset = activeElements.filter(e => e.datasetIndex === i);
+
+                    const drawOffsetLineAndPoints = (offset, color) => {
+                        ctx.save();
+                        ctx.translate(0, offset); 
+                        
+                        const origBorderColor = meta.dataset.options.borderColor;
+                        meta.dataset.options.borderColor = color;
+                        meta.dataset.options.borderWidth = 1.5;
+                        meta.dataset.draw(ctx);
+                        meta.dataset.options.borderColor = origBorderColor;
+
+                        meta.data.forEach((point, index) => {
+                            if (dataset._markerIndices && dataset._markerIndices.includes(index)) {
+                                const origPtBorder = point.options.borderColor;
+                                point.options.borderColor = color; 
+                                point.draw(ctx);                   
+                                point.options.borderColor = origPtBorder; 
+                            }
+                        });
+
+                        activeElsForDataset.forEach(activeEl => {
+                            const pt = meta.data[activeEl.index];
+                            if (pt) {
+                                ctx.beginPath(); ctx.arc(pt.x, pt.y, 4, 0, 2 * Math.PI); 
+                                ctx.fillStyle = '#fff'; ctx.fill(); ctx.lineWidth = 2; ctx.strokeStyle = color; ctx.stroke();
+                            }
+                        });
+                        ctx.restore();
+                    };
+
+                    drawOffsetLineAndPoints(-conf.pixelOffset, upColor);
+                    drawOffsetLineAndPoints(conf.pixelOffset, downColor);
+
+                    ctx.restore();
+                });
+            }
+        };
+
+        // ★ 結尾頭像繪製插件 (修復圖層順序：選中的最後畫/排最上層)
+        const endAvatarPlugin = {
+            id: 'endAvatar',
+            afterDatasetsDraw(chart) {
+                const { ctx } = chart;
+                chart._avatarRects = [];
+                const hasFocus = chart._focusedIds && chart._focusedIds.size > 0;
+
+                const normalAvatars = [];
+                const focusedAvatars = [];
+
+                chart.data.datasets.forEach((dataset, i) => {
+                    const meta = chart.getDatasetMeta(i);
+                    if (meta.hidden || dataset._isAux) return;
+                    
+                    let lastIndex = dataset.data.length - 1;
+                    while (lastIndex >= 0 && dataset.data[lastIndex] === null) { lastIndex--; }
+                    if (lastIndex === -1) return;
+                    
+                    const point = meta.data[lastIndex];
+                    if (!point || isNaN(point.x) || isNaN(point.y)) return;
+                    if (point.x < chart.chartArea.left || point.x > chart.chartArea.right || point.y < chart.chartArea.top || point.y > chart.chartArea.bottom) return;
+
+                    const isFocused = hasFocus ? chart._focusedIds.has(dataset.id) : false;
+                    const avatarData = { dataset, point, isFocused };
+
+                    if (hasFocus && !isFocused) {
+                        normalAvatars.push(avatarData);
+                    } else {
+                        focusedAvatars.push(avatarData); // 被選中的，或是沒觸發高光模式時
+                    }
+                });
+
+                const drawAvatar = ({dataset, point, isFocused}) => {
+                    const img = avatarImages[dataset.id];
+                    const size = 32;
+
+                    ctx.save();
+                    if (hasFocus && !isFocused) ctx.globalAlpha = 0.2; // 未選中變更淡
+                    if (isFocused) { 
+                        ctx.shadowBlur = 15; 
+                        ctx.shadowColor = dataset.originalColor; 
+                    }
+                    
+                    ctx.beginPath(); 
+                    ctx.arc(point.x, point.y, size / 2, 0, Math.PI * 2); 
+                    ctx.closePath();
+                    
+                    ctx.strokeStyle = dataset.borderColor; 
+                    ctx.lineWidth = isFocused ? 4 : 2; 
+                    ctx.stroke(); 
+                    ctx.clip();
+                    
+                    if (img && img.complete) ctx.drawImage(img, point.x - size/2, point.y - size/2, size, size);
+                    ctx.restore();
+                    
+                    chart._avatarRects.push({ datasetId: dataset.id, x: point.x, y: point.y, radius: size / 2 });
+                };
+
+                // 先畫普通(或被淡化)的，再畫高光聚焦的，確保高光在最上方
+                normalAvatars.forEach(drawAvatar);
+                focusedAvatars.forEach(drawAvatar);
+            }
+        };
+
+        const allGroups = [...new Set(CHANNEL_REGISTRY.map(ch => ch.group))];
+        let activeGroups = [...allGroups];
+        let colorMode = 'personal';
+
+        function hexToRgba(hex, alpha) {
+            let r = 0, g = 0, b = 0;
+            if (hex.startsWith('rgba')) return hex.replace(/[\d\.]+\)$/g, `${alpha})`);
+            if (hex.length === 7) { r = parseInt(hex.slice(1, 3), 16); g = parseInt(hex.slice(3, 5), 16); b = parseInt(hex.slice(5, 7), 16); }
+            return `rgba(${r}, ${g}, ${b}, ${alpha})`;
+        }
+
+        function formatYAxisLabel(value) {
+            if (value === 0) return '0';
+            let w = value / 10000;
+            return Number.isInteger(w) ? w + '萬' : w.toFixed(1) + '萬'; 
+        }
+
+        function getFilteredDatasets() {
+            const currentIdx = parseInt(document.getElementById('progressRange').value);
+            const datasets = [];
+
+            CHANNEL_REGISTRY.filter(ch => activeGroups.includes(ch.group)).forEach(ch => {
+                const color = colorMode === 'personal' ? ch.color : (GROUP_COLORS[ch.group] || "#999");
+                const markers = EVENT_MARKERS[ch.id] || [];
+                const markerIndices = markers.map(m => timeToIndex[`${m[0]}_${m[1]}`]);
+                const baseData = processedStatsData[ch.id].slice(0, currentIdx + 1);
+
+                datasets.push({
+                    id: ch.id, 
+                    label: ch.name,
+                    data: baseData,
+                    hidden: manuallyHiddenIds.has(ch.id), 
+                    originalColor: color,
+                    borderColor: color,
+                    backgroundColor: color,
+                    borderWidth: 2, 
+                    tension: 0.1, 
+                    pointRadius: (ctx) => {
+                        if (ctx.dataIndex === undefined) return 0;
+                        const ds = ctx.dataset;
+                        const currentIdx = parseInt(document.getElementById('progressRange').value);
+                        if (ds._markerIndices && ds._markerIndices.includes(ctx.dataIndex) && ctx.dataIndex <= currentIdx) {
+                            const hasFocus = myChart._focusedIds && myChart._focusedIds.size > 0;
+                            const isSelected = !hasFocus || myChart._focusedIds.has(ds.id);
+                            return isSelected ? 8 : 4;
+                        }
+                        return 0;
+                    },
+                    pointStyle: fullTimelineLabels.map((_, i) => markerIndices.includes(i) ? 'triangle' : 'circle'),
+                    pointBackgroundColor: '#fff',
+                    pointBorderColor: color,
+                    pointBorderWidth: 2,
+                    customAvatar: ch.img, 
+                    spanGaps: false,
+                    _markerIndices: markerIndices,
+                    _isMain: true
+                });
+            });
+            return datasets;
+        }
+
+        const ctxChart = document.getElementById('myChart').getContext('2d');
+        const tooltipEl = document.getElementById('custom-tooltip');
+
+        function syncSlidersUIOnly(chart) {
+            const x = chart.scales.x; const y = chart.scales.y;
+            let xMinPct = Math.max(0, (x.min / (totalHours - 1)) * 100);
+            let xMaxPct = Math.min(100, (x.max / (totalHours - 1)) * 100);
+            document.getElementById('thumbLeft').style.left = xMinPct + '%';
+            document.getElementById('thumbRight').style.left = xMaxPct + '%';
+            document.getElementById('rangeActive').style.left = xMinPct + '%';
+            document.getElementById('rangeActive').style.width = (xMaxPct - xMinPct) + '%';
+            
+            const leftLabelIdx = Math.max(0, Math.round(x.min));
+            const rightLabelIdx = Math.min(totalHours-1, Math.round(x.max));
+            document.getElementById('labelLeft').innerText = fullTimelineLabels[leftLabelIdx].split(" ")[1]; 
+            document.getElementById('labelRight').innerText = fullTimelineLabels[rightLabelIdx].split(" ")[1];
+
+            let yMinPct = Math.max(0, ((y.min - globalYMin) / (globalYMax - globalYMin)) * 100);
+            let yMaxPct = Math.min(100, ((y.max - globalYMin) / (globalYMax - globalYMin)) * 100);
+            document.getElementById('yThumbBottom').style.bottom = yMinPct + '%';
+            document.getElementById('yThumbTop').style.bottom = yMaxPct + '%';
+            document.getElementById('yRangeActive').style.bottom = yMinPct + '%';
+            document.getElementById('yRangeActive').style.height = (yMaxPct - yMinPct) + '%';
+        }
+
+        const myChart = new Chart(ctxChart, {
+            type: 'line',
+            plugins: [auxLinesPlugin, endAvatarPlugin, verticalHoverLinePlugin],
+            data: { labels: fullTimelineLabels, datasets: getFilteredDatasets() },
+            options: { 
+                layout: { padding: { top: 15, bottom: 15, left: 10, right: 10 } },
+                responsive: true, maintainAspectRatio: false, animation: { duration: 0 },
+                interaction: { mode: 'index', intersect: false },
+                onClick: (e, elements, chart) => {
+                    let clickedId = null;
+                    if (chart._avatarRects) {
+                        // 反向遍歷以點中上層頭像
+                        for (let i = chart._avatarRects.length - 1; i >= 0; i--) {
+                            const rect = chart._avatarRects[i];
+                            if (Math.sqrt((e.x - rect.x) ** 2 + (e.y - rect.y) ** 2) <= rect.radius) { 
+                                clickedId = rect.datasetId; break; 
+                            }
+                        }
+                    }
+                    
+                    if (!chart._focusedIds) chart._focusedIds = new Set();
+                    
+                    if (clickedId !== null) {
+                        // 保留點擊頭像可以「切換/取消」該成員的功能
+                        if (chart._focusedIds.has(clickedId)) chart._focusedIds.delete(clickedId);
+                        else chart._focusedIds.add(clickedId);
+                    } 
+                    // ✨ 這裡已經移除了 else { chart._focusedIds.clear(); } 
+                    // 這樣點擊畫布空白處，就不會清空高光了！
+
+                    applyFocusStyles(chart);
+                    updateFocusBtnUI(); // ✨ 新增這行
+
+                    if (document.getElementById('member-sidebar').classList.contains('open')) { 
+                        updateMemberSidebar(); 
+                    }
+
+                    // 判斷是否顯示右上角「關閉高光」按鈕
+                    // 原本是 'block' : 'none'，改成 'flex' : 'none'
+                    document.getElementById('clearFocusBtn').style.display = 
+                    (chart._focusedIds && chart._focusedIds.size > 0) ? 'flex' : 'none';
+                },
+                plugins: {
+                    legend: { display: false },
+                    tooltip: { enabled: false, external: handleTooltip },
+                    zoom: {
+                        pan: { 
+                            enabled: true, 
+                            mode: 'xy', 
+                            modifierKey: null, 
+                            onPan: ({chart}) => syncSlidersUIOnly(chart) 
+                        },
+                        zoom: { 
+                            wheel: { enabled: false }, 
+                            pinch: { enabled: true }, 
+                            mode: 'xy', 
+                            onZoom: ({chart}) => syncSlidersUIOnly(chart) 
+                        },
+                        // ✨ 關鍵：明確限制 Y 軸的平移範圍
+                        limits: {
+                            y: { 
+                                min: globalYMin, 
+                                max: globalYMax, 
+                                minRange: 20000 
+                            },
+                            x: { 
+                                min: 0, 
+                                max: totalHours - 1 
+                            }
+                        }
+                    }
+                },
+                scales: {
+                    x: { 
+                        min: 0, max: totalHours - 1,
+                        grid: { 
+                            display: true, drawTicks: true,
+                            color: (ctx) => {
+                                if (!Number.isInteger(ctx.tick.value)) return 'transparent';
+                                const l = fullTimelineLabels[ctx.tick.value];
+                                return (l && l.includes("00:00")) ? 'rgba(0,0,0,0.15)' : 'transparent'; 
+                            },
+                            tickColor: (ctx) => {
+                                if (!Number.isInteger(ctx.tick.value)) return 'transparent';
+                                const l = fullTimelineLabels[ctx.tick.value];
+                                return (l && (l.includes("00:00") || l.includes("12:00"))) ? 'rgba(0,0,0,0.3)' : 'transparent';
+                            }
+                        },
+                        ticks: {
+                            maxRotation: 0, autoSkip: false, 
+                            callback: function(val) { 
+                                if (!Number.isInteger(val)) return null;
+                                const label = fullTimelineLabels[val];
+                                if (!label) return null;
+                                if (label.includes("00:00")) return label.split(" ")[1]; 
+                                if (label.includes("12:00")) return ""; 
+                                return null;
+                            },
+                            font: { weight: 'bold', size: 11 }
+                        },
+                        afterBuildTicks: function(scaleInstance) {
+                            const range = scaleInstance.max - scaleInstance.min;
+                            const newTicks = [];
+                            const start = Math.max(0, Math.ceil(scaleInstance.min));
+                            const end = Math.min(totalHours - 1, Math.floor(scaleInstance.max));
+                            let dayStep = 1, showHalfDay = false;
+                            
+                            if (range > 360) dayStep = 3; 
+                            else if (range > 216) dayStep = 2; 
+                            else if (range >= 120) dayStep = 1; 
+                            else { dayStep = 1; showHalfDay = true; }
+
+                            for (let i = start; i <= end; i++) {
+                                const label = fullTimelineLabels[i];
+                                if (!label) continue;
+                                if (label.includes("00:00")) {
+                                    const match = label.match(/Day (\d+)/);
+                                    if (match && (parseInt(match[1], 10) - 1) % dayStep === 0) newTicks.push({ value: i });
+                                } else if (label.includes("12:00") && showHalfDay) {
+                                    newTicks.push({ value: i }); 
+                                }
+                            }
+                            scaleInstance.ticks = newTicks;
+                        }
+                    },
+                    y: { 
+                        min: globalYMin, max: globalYMax,
+                        grid: { color: 'rgba(0,0,0,0.05)' }, 
+                        afterFit: function(scaleInstance) { scaleInstance.width = 65; },
+                        ticks: { callback: formatYAxisLabel },
+                        afterBuildTicks: function(scaleInstance) {
+                            const range = scaleInstance.max - scaleInstance.min;
+                            let step;
+                            if (range >= 640000) step = 200000; 
+                            else if (range >= 340000) step = 100000; 
+                            else if (range >= 70000) step = 50000;  
+                            else step = 10000;  
+
+                            // ✨ 關鍵：平移時必須將刻度「對齊」且「限制」在邊界內
+                            // 使用 Math.max/min 確保計算出來的起點和終點絕不會超出範圍
+                            const minVal = Math.max(globalYMin, Math.ceil(scaleInstance.min / step) * step);
+                            const maxVal = Math.min(globalYMax, Math.floor(scaleInstance.max / step) * step);
+                            
+                            const ticks = [];
+                            for (let i = minVal; i <= maxVal; i += step) {
+                                ticks.push({ value: i });
+                            }
+                            
+                            // 修正：確保至少有一個刻度，防止圖表變白
+                            if (ticks.length === 0) {
+                                ticks.push({ value: globalYMin });
+                            }
+                            
+                            scaleInstance.ticks = ticks;
+                        }
+                    }
+                }
+            }
+        });
+
+        // ==========================================
+        // 3. UI 互動與播放控制
+        // ==========================================
+        function handleTooltip(context) {
+            const { chart, tooltip } = context;
+            if (tooltip.opacity === 0) { tooltipEl.style.opacity = 0; return; }
+            
+            let currentScrollTop = 0;
+            const oldContainer = tooltipEl.querySelector('.tooltip-list-container');
+            if (oldContainer) { currentScrollTop = oldContainer.scrollTop; }
+
+            if (tooltip.body) {
+                const title = tooltip.title[0] || '';
+                let html = `<div class="tooltip-header">${title}</div><div class="tooltip-list-container">`;
+                
+                const validPoints = tooltip.dataPoints.filter(p => p.raw !== null && chart.isDatasetVisible(p.datasetIndex) && chart.data.datasets[p.datasetIndex]._isMain);
+                
+                validPoints.sort((a, b) => b.raw - a.raw).forEach(point => {
+                    const ds = chart.data.datasets[point.datasetIndex];
+                    const isFaded = chart._focusedIds && chart._focusedIds.size > 0 && !chart._focusedIds.has(ds.id);
+                    html += `<div class="tooltip-row" style="border-left-color: ${ds.originalColor}; opacity: ${isFaded ? 0.3 : 1}">
+                        <img src="${ds.customAvatar}" class="tooltip-avatar">
+                        <div class="tooltip-name">${ds.label}</div>
+                        <div class="tooltip-value">${point.raw.toLocaleString()}</div>
+                    </div>`;
+                });
+                
+                html += `</div>`;
+                tooltipEl.innerHTML = html;
+
+                const newContainer = tooltipEl.querySelector('.tooltip-list-container');
+                if (newContainer) { newContainer.scrollTop = currentScrollTop; }
+            }
+            
+            const { offsetLeft: px, offsetTop: py } = chart.canvas;
+            let left = px + tooltip.caretX + 15;
+            if (tooltip.caretX > chart.width / 2) left -= (tooltipEl.offsetWidth + 30);
+            tooltipEl.style.opacity = 1; tooltipEl.style.left = left + 'px'; tooltipEl.style.top = py + 'px';
+        }
+
+        const progressRange = document.getElementById('progressRange');
+        progressRange.max = totalHours - 1;
+
+        function updateProgress(val) {
+            const idx = parseInt(val);
+            progressRange.value = idx;
+            document.getElementById('timeLabel').innerText = fullTimelineLabels[idx];
+
+            myChart.data.datasets.forEach(ds => {
+                const fullData = processedStatsData[ds.id];
+                if (!fullData) return;
+                ds.data = fullData.slice(0, idx + 1); 
+            });
+            
+            applyFocusStyles(myChart, false); 
+            myChart.update('none'); 
+        }
+
+        progressRange.oninput = (e) => updateProgress(e.target.value);
+
+        function applyFocusStyles(chart, shouldUpdate = true) {
+            const hasFocus = chart._focusedIds && chart._focusedIds.size > 0;
+            
+            chart.data.datasets.forEach((ds) => {
+                const mainId = ds._isAux ? ds._parentId : ds.id;
+                const isSelected = !hasFocus || chart._focusedIds.has(mainId);
+                const alpha = isSelected ? 1 : 0.1;
+                
+                ds.borderColor = hexToRgba(ds.originalColor, alpha);
+                ds.backgroundColor = hexToRgba(ds.originalColor, alpha);
+                ds.pointBorderColor = hexToRgba(ds.originalColor, alpha);
+                // ✨ 修正 Z-Index：被選中的 order=0 (最上層)，未選中 order=999
+                ds.order = isSelected ? 0 : 999; 
+            });
+            
+            if (shouldUpdate) { chart.update(); }
+        }
+
+        // ====== 播放邏輯 ======
+        let isPlaying = false, animationFrameId = null, lastFrameTime = 0;
+        const playIntervalMs = 80;
+
+        document.getElementById('playBtn').onclick = function() {
+            const btn = this; 
+            if (isPlaying) { 
+                isPlaying = false;
+                cancelAnimationFrame(animationFrameId); 
+                btn.innerHTML = "▶ 播放"; 
+                btn.style.backgroundColor = "#28a745"; 
+            } else {
+                if (parseInt(progressRange.value) >= totalHours - 1) progressRange.value = 0; 
+                isPlaying = true;
+                btn.innerHTML = "⏸ 暫停"; 
+                btn.style.backgroundColor = "#ffc107";
+                lastFrameTime = performance.now(); 
+
+                function playLoop(timestamp) {
+                    if (!isPlaying) return; 
+                    if (timestamp - lastFrameTime >= playIntervalMs) {
+                        let v = parseInt(progressRange.value);
+                        if (v < totalHours - 1) { 
+                            updateProgress(v + 1); lastFrameTime = timestamp; 
+                        } else { 
+                            isPlaying = false; btn.innerHTML = "▶ 播放"; btn.style.backgroundColor = "#28a745"; return; 
+                        }
+                    }
+                    if (isPlaying) animationFrameId = requestAnimationFrame(playLoop);
+                }
+                animationFrameId = requestAnimationFrame(playLoop);
+            }
+        };
+
+function updateFocusBtnUI() {
+    const btn = document.getElementById('clearFocusBtn');
+    const hasFocus = myChart._focusedIds && myChart._focusedIds.size > 0;
+    
+    if (hasFocus) {
+        btn.classList.add('is-active'); // 變紅且可按
+    } else {
+        btn.classList.remove('is-active'); // 變灰且不可按
+    }
+}
+        // ==========================================
+        // 4. 雙軸拉條手動拖拉邏輯
+        // ==========================================
+        let xMinPct = 0, xMaxPct = 100, yMinPct = 0, yMaxPct = 100; 
+
+        function updateXRangeUI() {
+            document.getElementById('thumbLeft').style.left = xMinPct + '%';
+            document.getElementById('thumbRight').style.left = xMaxPct + '%';
+            document.getElementById('rangeActive').style.left = xMinPct + '%';
+            document.getElementById('rangeActive').style.width = (xMaxPct - xMinPct) + '%';
+            const minIdx = Math.round((xMinPct / 100) * (totalHours - 1));
+            const maxIdx = Math.round((xMaxPct / 100) * (totalHours - 1));
+            document.getElementById('labelLeft').innerText = fullTimelineLabels[minIdx].split(" ")[1];
+            document.getElementById('labelRight').innerText = fullTimelineLabels[maxIdx].split(" ")[1];
+            myChart.options.scales.x.min = minIdx;
+            myChart.options.scales.x.max = maxIdx;
+            myChart.update('none'); 
+        }
+
+        function updateYRangeUI() {
+            document.getElementById('yThumbBottom').style.bottom = yMinPct + '%';
+            document.getElementById('yThumbTop').style.bottom = yMaxPct + '%';
+            document.getElementById('yRangeActive').style.bottom = yMinPct + '%';
+            document.getElementById('yRangeActive').style.height = (yMaxPct - yMinPct) + '%';
+            myChart.options.scales.y.min = globalYMin + (yMinPct / 100) * (globalYMax - globalYMin);
+            myChart.options.scales.y.max = globalYMin + (yMaxPct / 100) * (globalYMax - globalYMin);
+            myChart.update('none');
+        }
+
+        function setupThumb(thumb, isLeft, isX) {
+            let isDragging = false;
+            thumb.onmousedown = (e) => { isDragging = true; e.preventDefault(); };
+            window.addEventListener('mousemove', (e) => {
+                if (!isDragging) return;
+                const track = isX ? document.getElementById('rangeTrack') : document.getElementById('yRangeTrack');
+                const rect = track.getBoundingClientRect();
+                let pos = isX ? ((e.clientX - rect.left) / rect.width) * 100 : 100 - ((e.clientY - rect.top) / rect.height) * 100;
+                pos = Math.max(0, Math.min(100, pos));
+                if (isX) {
+                    if (isLeft) xMinPct = Math.min(pos, xMaxPct - 2); else xMaxPct = Math.max(pos, xMinPct + 2);
+                    updateXRangeUI();
+                } else {
+                    if (isLeft) yMinPct = Math.min(pos, yMaxPct - 2); else yMaxPct = Math.max(pos, yMinPct + 2);
+                    updateYRangeUI();
+                }
+            });
+            window.addEventListener('mouseup', () => isDragging = false);
+        }
+
+        function setupActiveTrack(trackDiv, isX) {
+            let isDragging = false, startClient = 0, startMinPct = 0, startMaxPct = 0;
+            trackDiv.onmousedown = (e) => {
+                isDragging = true; startClient = isX ? e.clientX : e.clientY;
+                startMinPct = isX ? xMinPct : yMinPct; startMaxPct = isX ? xMaxPct : yMaxPct; e.preventDefault();
+            };
+            window.addEventListener('mousemove', (e) => {
+                if (!isDragging) return;
+                const rect = trackDiv.parentElement.getBoundingClientRect();
+                let deltaPct = isX ? ((e.clientX - startClient) / rect.width) * 100 : -((e.clientY - startClient) / rect.height) * 100;
+                let newMin = startMinPct + deltaPct;
+                let newMax = startMaxPct + deltaPct;
+                if (newMin < 0) { newMax -= newMin; newMin = 0; }
+                if (newMax > 100) { newMin -= (newMax - 100); newMax = 100; }
+                if (isX) { xMinPct = newMin; xMaxPct = newMax; updateXRangeUI(); } 
+                else { yMinPct = newMin; yMaxPct = newMax; updateYRangeUI(); }
+            });
+            window.addEventListener('mouseup', () => isDragging = false);
+        }
+
+        setupThumb(document.getElementById('thumbLeft'), true, true);
+        setupThumb(document.getElementById('thumbRight'), false, true);
+        setupThumb(document.getElementById('yThumbBottom'), true, false);
+        setupThumb(document.getElementById('yThumbTop'), false, false);
+        setupActiveTrack(document.getElementById('rangeActive'), true);
+        setupActiveTrack(document.getElementById('yRangeActive'), false);
+
+        document.getElementById('resetZoom').onclick = () => {
+            myChart.resetZoom(); xMinPct = 0; xMaxPct = 100; yMinPct = 0; yMaxPct = 100;
+            updateXRangeUI(); updateYRangeUI();
+        };
+
+        // ==========================================
+        // 5. 折疊面板與篩選邏輯 (✨ 面板高光操作優化)
+        // ==========================================
+        
+        // --- 切換配色 ---
+        document.getElementById('toggleColorBtn').onclick = (e) => {
+            const hiddenIds = new Set();
+            myChart.data.datasets.forEach((ds, i) => {
+                if (myChart.getDatasetMeta(i).hidden === true || ds.hidden === true) { hiddenIds.add(ds.id); }
+            });
+
+            colorMode = colorMode === 'personal' ? 'group' : 'personal';
+            e.target.innerText = `切換配色：${colorMode === 'personal' ? '個人色' : '群組色'}`;
+            
+            const newDatasets = getFilteredDatasets();
+            newDatasets.forEach(ds => { if (hiddenIds.has(ds.id)) { ds.hidden = true; } });
+
+            myChart.data.datasets = newDatasets;
+            applyFocusStyles(myChart);
+            if (document.getElementById('member-sidebar').classList.contains('open')) { updateMemberSidebar(); }
+        };
+
+        // --- 成員篩選 ---
+        document.getElementById('memberPanelBtn').onclick = () => {
+            document.getElementById('group-sidebar').classList.remove('open'); 
+            const sidebar = document.getElementById('member-sidebar');
+            sidebar.classList.toggle('open'); 
+            if (sidebar.classList.contains('open')) updateMemberSidebar();
+        };
+
+        function updateMemberSidebar() {
+            const listEl = document.getElementById('member-list');
+            listEl.innerHTML = '';
+            const hasFocus = myChart._focusedIds && myChart._focusedIds.size > 0;
+
+            myChart.data.datasets.forEach((ds, idx) => {
+                if (ds._isAux) return; 
+                
+                const isVisible = !manuallyHiddenIds.has(ds.id); 
+                const isFocused = hasFocus && myChart._focusedIds.has(ds.id);
+                const isFaded = hasFocus && !isFocused; // 若有高光模式且未被選中
+
+                const item = document.createElement('div');
+                item.className = `member-item ${!isVisible ? 'hidden-member' : ''}`;
+                
+                // 左側 Checkbox (純控制圖表顯示/隱藏)
+                const cb = document.createElement('input');
+                cb.type = 'checkbox';
+                cb.style.cssText = "width:16px;height:16px; margin:0;";
+                cb.checked = isVisible;
+                cb.onclick = (e) => {
+                    e.stopPropagation(); // 阻止事件冒泡觸發高光
+                    if (isVisible) { manuallyHiddenIds.add(ds.id); myChart.setDatasetVisibility(idx, false); } 
+                    else { manuallyHiddenIds.delete(ds.id); myChart.setDatasetVisibility(idx, true); }
+                    myChart.update(); updateMemberSidebar(); 
+                };
+
+                // 右側點擊區塊 (控制高光)
+                const focusArea = document.createElement('div');
+                focusArea.className = 'focus-toggle-area';
+                
+                // UI 狀態表現
+                if (isFocused) {
+                    focusArea.style.backgroundColor = '#e7f1ff'; 
+                    focusArea.style.fontWeight = 'bold';
+                    focusArea.style.color = '#007bff';
+                }
+                if (isFaded && isVisible) {
+                    focusArea.style.opacity = '0.5';
+                }
+
+                focusArea.innerHTML = `
+                    <img src="${ds.customAvatar}" class="member-avatar-mini" style="border-color: ${ds.originalColor}">
+                    <span style="font-size: 13px;">${ds.label}</span>
+                `;
+
+                // 點擊觸發/取消高光  
+                focusArea.onclick = () => {
+                    if (!isVisible) return; 
+                    if (!myChart._focusedIds) myChart._focusedIds = new Set();
+                    
+                    if (myChart._focusedIds.has(ds.id)) {
+                        myChart._focusedIds.delete(ds.id);
+                    } else {
+                        myChart._focusedIds.add(ds.id);
+                    }
+                    
+                    // ✨ 這裡一定要用 myChart，用 chart 會導致找不到變數
+                    applyFocusStyles(myChart); 
+                    updateFocusBtnUI();
+                    updateMemberSidebar();
+                };
+
+                item.appendChild(cb);
+                item.appendChild(focusArea);
+                listEl.appendChild(item);
+            });
+        }
+
+        // --- 群組篩選 ---
+        document.getElementById('groupPanelBtn').onclick = () => {
+            document.getElementById('member-sidebar').classList.remove('open'); 
+            const sidebar = document.getElementById('group-sidebar');
+            sidebar.classList.toggle('open'); 
+            if (sidebar.classList.contains('open')) updateGroupSidebar();
+        };
+
+        function updateGroupSidebar() {
+            const listEl = document.getElementById('group-list');
+            listEl.innerHTML = '';
+            const groups = [...new Set(CHANNEL_REGISTRY.map(ch => ch.group))];
+            
+            groups.forEach(g => {
+                const isVisible = activeGroups.includes(g);
+                const item = document.createElement('div');
+                item.className = `member-item ${!isVisible ? 'hidden-member' : ''}`;
+                item.style.cursor = 'pointer';
+                item.innerHTML = `<input type="checkbox" style="width:16px;height:16px" ${isVisible ? 'checked' : ''}>
+                    <div style="width:12px;height:12px;border-radius:50%;background-color:${GROUP_COLORS[g] || '#999'}"></div>
+                    <span style="font-size: 13px; flex-grow: 1;">${g}</span>`;
+                
+                item.onclick = () => { 
+                    if (isVisible) activeGroups = activeGroups.filter(x => x !== g); else activeGroups.push(g);
+                    myChart.data.datasets = getFilteredDatasets(); 
+                    applyFocusStyles(myChart); 
+                    updateGroupSidebar();
+                    if (document.getElementById('member-sidebar').classList.contains('open')) updateMemberSidebar();
+                };
+                listEl.appendChild(item);
+            });
+            document.getElementById('allGroupBtn').innerText = activeGroups.length === groups.length ? "全不選" : "全選";
+        }
+
+        document.getElementById('allGroupBtn').onclick = () => {
+            const groups = [...new Set(CHANNEL_REGISTRY.map(ch => ch.group))];
+            if (activeGroups.length === groups.length) activeGroups = []; else activeGroups = [...groups]; 
+            
+            myChart.data.datasets = getFilteredDatasets(); 
+            applyFocusStyles(myChart); 
+            updateGroupSidebar();
+            if (document.getElementById('member-sidebar').classList.contains('open')) updateMemberSidebar();
+        };
+
+        // 啟動初始化
+        updateProgress(totalHours - 1);
+        updateXRangeUI();
+        updateYRangeUI();
+
+        // ==========================================
+        // 6. 將畫布的滾輪事件轉移給 Tooltip 內部容器
+        // ==========================================
+        document.querySelector('.chart-container').addEventListener('wheel', (e) => {
+            const tooltipEl = document.getElementById('custom-tooltip');
+            if (tooltipEl.style.opacity === '1') {
+                const listContainer = tooltipEl.querySelector('.tooltip-list-container');
+                if (listContainer) {
+                    const hasScrollbar = listContainer.scrollHeight > listContainer.clientHeight;
+                    if (hasScrollbar) {
+                        listContainer.scrollTop += e.deltaY;
+                        e.preventDefault(); 
+                    }
+                }
+            }
+        }, { passive: false });
+
+        // 當視窗大小改變時，強制重新渲染圖表以適應新高度
+        window.addEventListener('resize', () => {
+            myChart.resize();
+        });
+
+        // ==========================================
+        // ✨ 新增：右上角浮動「關閉高光」按鈕點擊事件
+        // ==========================================
+document.getElementById('clearFocusBtn').onclick = function() {
+    if (myChart._focusedIds) myChart._focusedIds.clear();
+    applyFocusStyles(myChart);
+    updateFocusBtnUI(); // ✨ 新增這行
+    if (document.getElementById('member-sidebar').classList.contains('open')) { 
+        updateMemberSidebar(); 
+    }
+};
+
+
+    </script>
+</body>
+</html>
